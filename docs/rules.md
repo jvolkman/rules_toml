@@ -2,15 +2,22 @@
 
 Public API re-exports
 
-<a id="example"></a>
+<a id="toml.decode"></a>
 
-## example
+## toml.decode
 
 <pre>
-example()
+toml.decode(<a href="#toml.decode-data">data</a>, <a href="#toml.decode-default">default</a>)
 </pre>
 
-This is an example
 
+
+**PARAMETERS**
+
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="toml.decode-data"></a>data |  <p align="center"> - </p>   |  none |
+| <a id="toml.decode-default"></a>default |  <p align="center"> - </p>   |  <code>None</code> |
 
 

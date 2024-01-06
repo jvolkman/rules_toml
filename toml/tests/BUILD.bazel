@@ -1,0 +1,3 @@
+load(":decode_tests.bzl", "create_tests")
+
+create_tests()
