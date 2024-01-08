@@ -1,6 +1,6 @@
 {
   "lockFileVersion": 3,
-  "moduleFileHash": "735d8d28737e64558b6644a4fd83f83aa0d9ab998ab8a9cdf218beddb5aa04c6",
+  "moduleFileHash": "ea4489fa2abf80ebfd7bb178e536400bcbc1f1e274bb94ecd4c410704ca98ca7",
   "flags": {
     "cmdRegistries": [
       "https://bcr.bazel.build/"
@@ -41,14 +41,14 @@
             {
               "tagName": "//toml/tests:test_suite_repo.bzl%test_suite",
               "attributeValues": {
-                "url": "https://github.com/toml-lang/toml-test/archive/refs/tags/v1.4.0.tar.gz",
                 "integrity": "sha256-NxcWN3dJQBYkOkcmFQC7vtalnIniMvn5abPdhJwS22M=",
+                "url": "https://github.com/toml-lang/toml-test/archive/refs/tags/v1.4.0.tar.gz",
                 "name": "toml_test_suite"
               },
               "devDependency": false,
               "location": {
                 "file": "@@//:MODULE.bazel",
-                "line": 18,
+                "line": 19,
                 "column": 11
               }
             }
@@ -1179,7 +1179,7 @@
   "moduleExtensions": {
     "//:MODULE.bazel%_repo_rules": {
       "general": {
-        "bzlTransitiveDigest": "v0DY1jt7upB/+CJmJe+GVQUPg3V6Slvm0L+2NnoZV+k=",
+        "bzlTransitiveDigest": "NiB/CmOUWpYRie3oo2HFwzehhWrtYRfthbeZ3mqEVGI=",
         "accumulatedFileDigests": {},
         "envVariables": {},
         "generatedRepoSpecs": {
@@ -1187,8 +1187,8 @@
             "bzlFile": "@@//toml/tests:test_suite_repo.bzl",
             "ruleClassName": "test_suite",
             "attributes": {
-              "url": "https://github.com/toml-lang/toml-test/archive/refs/tags/v1.4.0.tar.gz",
               "integrity": "sha256-NxcWN3dJQBYkOkcmFQC7vtalnIniMvn5abPdhJwS22M=",
+              "url": "https://github.com/toml-lang/toml-test/archive/refs/tags/v1.4.0.tar.gz",
               "name": "_main~_repo_rules~toml_test_suite"
             }
           }
