@@ -12,6 +12,12 @@ _RE_FLOAT = re.compile(r"^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)(?:\.[0-9](?:[0-9]|_[
 _RE_BOOLEAN = re.compile(r"^(?:true|false)")
 _RE_LOCAL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
+# DEL character (U+007F), Surrogates, Replacement
+_DEL = "\177"
+_SURROGATE_LOW = json.decode('"\\uD800"')
+_SURROGATE_HIGH = json.decode('"\\uDFFF"')
+_REPLACEMENT = json.decode('"\\uFFFD"')
+
 # --- Status & Error Handling ---
 
 def _errors():
@@ -39,6 +45,7 @@ def _parser(data, default):
         has_default = default != None,
         path_types = {(): "table"},
         explicit_paths = {(): True},
+        header_paths = {},
     )
 
 def _fail(state, msg):
@@ -67,7 +74,13 @@ def _skip_ws(state):
                 if temp_p >= n or d[temp_p] == "\n":
                     break
                 cc = d[temp_p]
-                if cc < " " and cc != "\t":
+                if cc == "\r":
+                    if temp_p + 1 < n and d[temp_p + 1] == "\n":
+                        pass  # Valid CRLF
+                    else:
+                        _fail(state, "Illegal control char in comment")
+                        break
+                if (cc < " " and cc != "\t") or cc == _DEL or cc == _REPLACEMENT or (cc >= _SURROGATE_LOW and cc <= _SURROGATE_HIGH):
                     _fail(state, "Illegal control char in comment")
                     break
                 temp_p += 1
@@ -90,9 +103,6 @@ def _expect(state, char):
 
 def _is_dict(v):
     return type(v) == "dict"
-
-def _is_list(v):
-    return type(v) == "list"
 
 def _is_hex(s):
     for i in range(len(s)):
@@ -204,16 +214,16 @@ def _parse_basic_string(state):
                     continue
             if esc == "u" or esc == "U":
                 sz = 4 if esc == "u" else 8
-                hX = d[state.pos[0]:state.pos[0] + sz]
-                if len(hX) == sz and _is_hex(hX):
-                    code = int(hX, 16)
+                hx = d[state.pos[0]:state.pos[0] + sz]
+                if len(hx) == sz and _is_hex(hx):
+                    code = int(hx, 16)
                     if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
                         chars.append(_codepoint_to_string(code))
                         state.pos[0] += sz
                         continue
             _fail(state, "Invalid escape")
             return ""
-        if c < " " and c != "\t":
+        if (c < " " and c != "\t") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
             _fail(state, "Control char in string")
             return ""
         chars.append(c)
@@ -235,7 +245,8 @@ def _parse_literal_string(state):
         _fail(state, "Newline in literal string")
         return ""
     for i in range(len(content)):
-        if content[i] < " " and content[i] != "\t":
+        c = content[i]
+        if (c < " " and c != "\t") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
             _fail(state, "Control char in literal string")
             return ""
     state.pos[0] = idx + 1
@@ -305,14 +316,17 @@ def _parse_multiline_basic_string(state):
             if esc in "uUx":
                 sz = 2 if esc == "x" else (4 if esc == "u" else 8)
                 state.pos[0] += 1
-                hS = d[state.pos[0]:state.pos[0] + sz]
-                if len(hS) == sz and _is_hex(hS):
-                    chars.append(_codepoint_to_string(int(hS, 16)))
-                    state.pos[0] += sz
-                    continue
+                hs = d[state.pos[0]:state.pos[0] + sz]
+                if len(hs) == sz and _is_hex(hs):
+                    # Check code point validity
+                    code = int(hs, 16)
+                    if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
+                        chars.append(_codepoint_to_string(code))
+                        state.pos[0] += sz
+                        continue
             _fail(state, "Invalid escape")
             return ""
-        if c < " " and c not in "\t\n\r":
+        if (c < " " and c not in "\t\n\r") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
             _fail(state, "Control char in multiline")
             return ""
         chars.append(c)
@@ -330,12 +344,13 @@ def _parse_multiline_literal_string(state):
         _fail(state, "Unterminated multiline literal string")
         return ""
     ex = 0
-    for i in range(1, 4):
+    for i in range(1, 3):
         if idx + 3 + i <= state.len and d[idx + 3:idx + 3 + i] == "'" * i:
             ex = i
     content = d[p:idx + ex]
     for i in range(len(content)):
-        if content[i] < " " and content[i] not in "\t\n\r":
+        c = content[i]
+        if (c < " " and c not in "\t\n\r") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
             _fail(state, "Control char in multiline literal")
             return ""
     state.pos[0] = idx + 3 + ex
@@ -429,11 +444,13 @@ def _get_or_create_table(state, keys, is_array):
         if lk in curr:
             curr[lk].append({})
             state.explicit_paths[tp] = True
+            state.header_paths[tp] = True
             return curr[lk][-1]
         else:
             curr[lk] = [{}]
             state.path_types[tp] = "aot"
             state.explicit_paths[tp] = True
+            state.header_paths[tp] = True
             return curr[lk][0]
     elif lk in curr:
         if state.explicit_paths.get(tp):
@@ -444,12 +461,14 @@ def _get_or_create_table(state, keys, is_array):
             _fail(state, "Table conflict on %s" % lk)
             return {}
         state.explicit_paths[tp] = True
+        state.header_paths[tp] = True
         return curr[lk]
     else:
         new_tab = {}
         curr[lk] = new_tab
         state.path_types[tp] = "table"
         state.explicit_paths[tp] = True
+        state.header_paths[tp] = True
         return new_tab
 
 def _parse_table(state):
@@ -486,18 +505,21 @@ def _parse_key_value(state, target):
         tp = tuple(base + ks[:i + 1])
         if k in curr:
             etc = state.path_types.get(tp)
-            if etc != "table" and etc != "aot":
+            if etc != "table":
                 _fail(state, "KV traversal conflict with %s" % k)
                 return
-            curr = curr[k] if etc == "table" else (curr[k][-1] if curr[k] else None)
-            if curr == None:
-                _fail(state, "KV empty AOT conflict")
+            if state.header_paths.get(tp):
+                _fail(state, "Cannot traverse header-defined table via dotted key %s" % k)
                 return
+            if etc == "table":
+                state.explicit_paths[tp] = True
+            curr = curr[k]
         else:
             new_tab = {}
             curr[k] = new_tab
             curr = new_tab
             state.path_types[tp] = "table"
+            state.explicit_paths[tp] = True
     lk = ks[-1]
     ltp = tuple(base + ks)
     if lk in curr:
@@ -571,6 +593,8 @@ def _parse_scalar(state):
                             state.pos[0] += 6
                             return struct(toml_type = "datetime", value = (vs + ch).replace(" ", "T").replace("t", "T"))
                 return struct(toml_type = "datetime-local", value = vs.replace(" ", "T").replace("t", "T"))
+            else:
+                state.pos[0] -= 1  # Backtrack
         return struct(toml_type = "date-local", value = ds)
     tr = _parse_time_manual(state)
     if tr:
@@ -585,9 +609,9 @@ def _parse_scalar(state):
         return m.group() == "true"
     sub = d[p:]
     if sub.startswith(("inf", "+inf", "-inf", "nan", "+nan", "-nan")):
-        l = 4 if sub[0] in "+-" else 3
-        v = d[p:p + l]
-        state.pos[0] += l
+        ln = 4 if sub[0] in "+-" else 3
+        v = d[p:p + ln]
+        state.pos[0] += ln
         return struct(toml_type = "float", value = "nan" if "nan" in v else ("-inf" if v[0] == "-" else "inf"))
     m = _RE_FLOAT.match(d[p:])
     if m and ("." in m.group() or "e" in m.group() or "E" in m.group()):
@@ -647,6 +671,7 @@ def _parse_complex_iterative(state):
                 cont.append(nc)
                 state.pos[0] += 1
                 stack.append([nc, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}])
+                fr[1] = _MODE_ARRAY_COMMA
                 continue
             v = _parse_val_nested(state)
             if v != None:
@@ -820,10 +845,22 @@ def _parse_value(state):
         return _parse_complex_iterative(state)
     if c in "\"'":
         return _parse_string(state)
-    return _parse_scalar(state)
+    res = _parse_scalar(state)
+    if res == None and not _has_error(state):
+        _fail(state, "Value expected")
+    return res
 
 def decode_internal(data, default = None, expand_values = False):
-    """Decodes a TOML string."""
+    """Decodes a TOML string.
+
+    Args:
+      data: The TOML string.
+      default: Optional value on error.
+      expand_values: If True, returns toml-test structure.
+
+    Returns:
+      The decoded value.
+    """
     state = _parser(data, default)
     for _ in range(len(data) + 1):
         if _has_error(state):
