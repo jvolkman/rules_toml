@@ -1,63 +1,15 @@
-"""Test rules to run the TOML test suite."""
+"""Test rules to run the TOML test suite using rules_testing."""
 
 load("@bazel_lib//lib:base64.bzl", "base64")
+load("@rules_testing//lib:unit_test.bzl", "unit_test")
 load("@toml_test_suite//:tests.bzl", "invalid_cases", "valid_cases")
 load("//toml/private:decode.bzl", "decode_internal")
 
 FAIL_DEFAULT = {"rules_toml_fail": True}
 
-VALID_TEST_TMPL = """\
-#!/bin/sh
-echo INPUT
-echo =====
-cat <<TOMLEOF
-{input}
-TOMLEOF
-echo
-echo EXPECTED
-echo ========
-cat <<TOMLEOF
-{expected}
-TOMLEOF
-echo
-echo ACTUAL
-echo ======
-cat <<TOMLEOF
-{actual}
-TOMLEOF
-exit {exit}
-"""
-
-INVALID_TEST_TMPL = """\
-#!/bin/sh
-echo INPUT
-echo =====
-cat <<TOMLEOF
-{input}
-TOMLEOF
-echo ACTUAL
-echo ======
-cat <<TOMLEOF
-{actual}
-TOMLEOF
-exit {exit}
-"""
-
-def _is_dict(v):
-    return type(v) == "dict"
-
-def _is_list(v):
-    return type(v) == "list"
-
 def _normalize_datetime(s):
-    # Normalize datetime string for comparison by ensuring 3 fractional digits if any,
-    # or just removing trailing zeros from fractional part.
-    # RFC 3339: ...HH:MM:SS[.frac][Z|offset]
     if "." not in s:
         return s
-
-    # Simple normalization: trim trailing zeros in fractional part
-    # Find . and then any digits before Z or + or -
     dot_idx = s.find(".")
     end_idx = s.find("Z", dot_idx)
     if end_idx == -1:
@@ -66,27 +18,22 @@ def _normalize_datetime(s):
         end_idx = s.find("-", dot_idx)
     if end_idx == -1:
         end_idx = len(s)
-
     prefix = s[:dot_idx + 1]
     frac = s[dot_idx + 1:end_idx].rstrip("0")
     suffix = s[end_idx:]
-
     if not frac:
         return s[:dot_idx] + suffix
     return prefix + frac + suffix
 
 def _compare(a, b):
-    # Iterative comparison to handle large TOML files and avoid recursion
     stack = [(a, b)]
     for _ in range(100000):
         if not stack:
             return True
         curr_a, curr_b = stack.pop()
-
         if type(curr_a) != type(curr_b):
             return False
-
-        if _is_dict(curr_a):
+        if type(curr_a) == "dict":
             if "type" in curr_a and "value" in curr_a and len(curr_a) == 2:
                 if curr_a["type"] != curr_b["type"]:
                     return False
@@ -110,7 +57,7 @@ def _compare(a, b):
                     if k not in curr_b:
                         return False
                     stack.append((curr_a[k], curr_b[k]))
-        elif _is_list(curr_a):
+        elif type(curr_a) == "list":
             if len(curr_a) != len(curr_b):
                 return False
             for i in range(len(curr_a)):
@@ -119,72 +66,51 @@ def _compare(a, b):
             return False
     return True
 
-def _success_test_impl(ctx):
-    executable = ctx.actions.declare_file(ctx.label.name + ".sh")
-    input = base64.decode(ctx.attr.input_b64)
-    expected_str = base64.decode(ctx.attr.expected_b64)
-    expected = json.decode(expected_str)
-    actual = decode_internal(input, default = FAIL_DEFAULT, expand_values = True)
+def _toml_test_node_impl(env, case, is_valid):
+    input_data = base64.decode(case.input_b64)
+    actual = decode_internal(input_data, default = FAIL_DEFAULT, expand_values = True)
 
-    exit = "0" if _compare(actual, expected) else "1"
-    ctx.actions.write(output = executable, content = VALID_TEST_TMPL.format(
-        input = input,
-        expected = expected_str,
-        actual = actual,
-        exit = exit,
-    ))
+    if is_valid:
+        expected = json.decode(base64.decode(case.expected_b64))
+        if not _compare(actual, expected):
+            env.fail("Decode mismatch.\nExpected: {}\nActual: {}".format(expected, actual))
+    elif actual != FAIL_DEFAULT:
+        env.fail("Expected failure sentinel, but got: {}".format(actual))
 
-    return [DefaultInfo(executable = executable)]
-
-success_test = rule(
-    implementation = _success_test_impl,
-    attrs = {
-        "input_b64": attr.string(mandatory = True),
-        "expected_b64": attr.string(mandatory = True),
-    },
-    test = True,
-)
-
-def _failure_test_impl(ctx):
-    executable = ctx.actions.declare_file(ctx.label.name + ".sh")
-    input = base64.decode(ctx.attr.input_b64)
-    actual = decode_internal(input, default = FAIL_DEFAULT, expand_values = True)
-
-    exit = "0" if actual == FAIL_DEFAULT else "1"
-    ctx.actions.write(output = executable, content = INVALID_TEST_TMPL.format(
-        input = input,
-        actual = actual,
-        exit = exit,
-    ))
-
-    return [DefaultInfo(executable = executable)]
-
-failure_test = rule(
-    implementation = _failure_test_impl,
-    attrs = {
-        "input_b64": attr.string(mandatory = True),
-    },
-    test = True,
-)
+def _sanitize_name(name):
+    res = ""
+    for i in range(len(name)):
+        c = name[i]
+        if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_":
+            res += c
+        else:
+            res += "_"
+    return res
 
 def create_tests(name = "tests"):
-    """Creates tests for all cases in the toml-test suite.
+    """Instantiates the TOML compliance test suite.
 
     Args:
-      name: dummy name for macro compliance.
+      name: The name of the test suite.
     """
+    test_targets = []
 
-    # buildifier: disable=unused-variable
-    unused = name
     for case in valid_cases:
-        success_test(
-            name = "{}_test".format(case.name),
-            input_b64 = case.input_b64,
-            expected_b64 = case.expected_b64,
-        )
+        test_targets.append(_add_unit_test(case, is_valid = True))
 
     for case in invalid_cases:
-        failure_test(
-            name = "{}_test".format(case.name),
-            input_b64 = case.input_b64,
-        )
+        test_targets.append(_add_unit_test(case, is_valid = False))
+
+    native.test_suite(
+        name = name,
+        tests = test_targets,
+    )
+
+def _add_unit_test(case, is_valid):
+    name = "t_" + _sanitize_name(case.name)
+
+    def test_fn(env):
+        _toml_test_node_impl(env, case, is_valid)
+
+    unit_test(name = name, impl = test_fn)
+    return name
