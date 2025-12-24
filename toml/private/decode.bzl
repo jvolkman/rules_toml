@@ -1,4 +1,9 @@
-"""TOML decoder."""
+"""TOML decoder implementation for Starlark.
+
+This module provides functions for parsing TOML documents into Starlark structures.
+It is optimized for performance in the Starlark interpreter by using native string
+methods and a chunk-based parsing strategy.
+"""
 
 load("@re.bzl", "re")
 
@@ -11,6 +16,11 @@ _RE_FLOAT = re.compile(r"^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)(?:\.[0-9](?:[0-9]|_[
 _RE_LOCAL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 _DEL = "\177"
+
+# _MAX_ITERATIONS_MULTIPLIER is used to bound iterative loops in lieu of 'while'.
+# Theoretical bound is 2 * N (length of string), as every step either consumes
+# a character or handles a structural delimiter transition. We use 5 as a safety
+# margin for future refactors and complex error handling.
 _MAX_ITERATIONS_MULTIPLIER = 5
 
 # --- Status & Error Handling ---
