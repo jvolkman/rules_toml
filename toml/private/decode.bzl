@@ -12,11 +12,7 @@ _RE_FLOAT = re.compile(r"^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)(?:\.[0-9](?:[0-9]|_[
 _RE_BOOLEAN = re.compile(r"^(?:true|false)")
 _RE_LOCAL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
-# DEL character (U+007F), Surrogates, Replacement
 _DEL = "\177"
-_SURROGATE_LOW = json.decode('"\\uD800"')
-_SURROGATE_HIGH = json.decode('"\\uDFFF"')
-_REPLACEMENT = json.decode('"\\uFFFD"')
 
 # --- Status & Error Handling ---
 
@@ -65,25 +61,56 @@ def _skip_ws(state):
         if p >= n:
             break
         c = d[p]
-        if c == " " or c == "\t" or c == "\r":
+        if c == " " or c == "\t":
             state.pos[0] += 1
             continue
         if c == "#":
-            temp_p = p + 1
-            for _ in range(n - temp_p):
-                if temp_p >= n or d[temp_p] == "\n":
+            state.pos[0] += 1
+            for _ in range(n - state.pos[0]):
+                p2 = state.pos[0]
+                if p2 >= n or d[p2] == "\n":
                     break
-                cc = d[temp_p]
+                cc = d[p2]
                 if cc == "\r":
-                    if temp_p + 1 < n and d[temp_p + 1] == "\n":
-                        pass  # Valid CRLF
+                    if p2 + 1 < n and d[p2 + 1] == "\n":
+                        pass
                     else:
                         _fail(state, "Illegal control char in comment")
                         break
-                if (cc < " " and cc != "\t") or cc == _DEL or cc == _REPLACEMENT or (cc >= _SURROGATE_LOW and cc <= _SURROGATE_HIGH):
+                elif (cc < " " and cc != "\t") or cc == _DEL:
                     _fail(state, "Illegal control char in comment")
                     break
-                temp_p += 1
+
+                # UTF-8 Validation
+                blen = 0
+                if cc <= "\177":
+                    blen = 1
+                elif cc >= "\302" and cc <= "\337":
+                    blen = 2
+                elif cc >= "\340" and cc <= "\357":
+                    blen = 3
+                    if cc == "\355" and p2 + 1 < n:
+                        nc = d[p2 + 1]
+                        if nc >= "\240" and nc <= "\277":
+                            _fail(state, "Surrogate in comment")
+                            break
+                elif cc >= "\360" and cc <= "\364":
+                    blen = 4
+                else:
+                    _fail(state, "Invalid UTF-8 in comment")
+                    break
+                if blen > 1:
+                    valid = True
+                    for j in range(1, blen):
+                        if p2 + j >= n or not (d[p2 + j] >= "\200" and d[p2 + j] <= "\277"):
+                            valid = False
+                            break
+                    if not valid:
+                        _fail(state, "Truncated UTF-8 in comment")
+                        break
+                    state.pos[0] += blen
+                    continue
+                state.pos[0] += 1
             if _has_error(state):
                 break
             idx = d.find("\n", p)
@@ -223,7 +250,38 @@ def _parse_basic_string(state):
                         continue
             _fail(state, "Invalid escape")
             return ""
-        if (c < " " and c != "\t") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
+
+        blen = 0
+        if c <= "\177":
+            blen = 1
+        elif c >= "\302" and c <= "\337":
+            blen = 2
+        elif c >= "\340" and c <= "\357":
+            blen = 3
+            if c == "\355" and p + 1 < n:
+                nc = d[p + 1]
+                if nc >= "\240" and nc <= "\277":
+                    _fail(state, "Surrogate in string")
+                    return ""
+        elif c >= "\360" and c <= "\364":
+            blen = 4
+        else:
+            _fail(state, "Invalid UTF-8 in string")
+            return ""
+        if blen > 1:
+            valid = True
+            for j in range(1, blen):
+                if p + j >= n or not (d[p + j] >= "\200" and d[p + j] <= "\277"):
+                    valid = False
+                    break
+            if not valid:
+                _fail(state, "Truncated UTF-8 in string")
+                return ""
+            chars.append(d[p:p + blen])
+            state.pos[0] += blen
+            continue
+
+        if (c < " " and c != "\t") or c == _DEL or c == "\r":
             _fail(state, "Control char in string")
             return ""
         chars.append(c)
@@ -244,11 +302,39 @@ def _parse_literal_string(state):
     if "\n" in content:
         _fail(state, "Newline in literal string")
         return ""
-    for i in range(len(content)):
+
+    i = 0
+    n_content = len(content)
+    for _ in range(n_content):
+        if i >= n_content:
+            break
         c = content[i]
-        if (c < " " and c != "\t") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
+        if (c < " " and c != "\t") or c == _DEL or c == "\r":
             _fail(state, "Control char in literal string")
             return ""
+        blen = 0
+        if c <= "\177":
+            blen = 1
+        elif c >= "\302" and c <= "\337":
+            blen = 2
+        elif c >= "\340" and c <= "\357":
+            blen = 3
+            if c == "\355" and i + 1 < n_content:
+                nc = content[i + 1]
+                if nc >= "\240" and nc <= "\277":
+                    _fail(state, "Surrogate in literal string")
+                    return ""
+        elif c >= "\360" and c <= "\364":
+            blen = 4
+        else:
+            _fail(state, "Invalid UTF-8 in literal string")
+            return ""
+        if blen > 1:
+            for j in range(1, blen):
+                if i + j >= n_content or not (content[i + j] >= "\200" and content[i + j] <= "\277"):
+                    _fail(state, "Truncated UTF-8 in literal string")
+                    return ""
+        i += blen
     state.pos[0] = idx + 1
     return content
 
@@ -256,6 +342,8 @@ def _parse_multiline_basic_string(state):
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
+    elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
+        state.pos[0] += 2
     chars = []
     d = state.data
     n = state.len
@@ -273,9 +361,15 @@ def _parse_multiline_basic_string(state):
                 else:
                     break
             if cnt >= 3:
-                for _ in range(cnt - 3):
+                ex = 0
+                for i in range(1, 4):
+                    if p + 3 + i <= n and d[p + 3:p + 3 + i] == '"' * i:
+                        ex = i
+                if ex > 2:
+                    ex = 2
+                for _ in range(ex):
                     chars.append('"')
-                state.pos[0] += cnt
+                state.pos[0] += 3 + ex
                 return "".join(chars)
             for _ in range(cnt):
                 chars.append('"')
@@ -292,6 +386,10 @@ def _parse_multiline_basic_string(state):
                 for _ in range(n - tp):
                     if tp >= n:
                         break
+                    if tp + 1 < n and d[tp] == "\r" and d[tp + 1] == "\n":
+                        hl = True
+                        tp += 2
+                        break
                     if d[tp] == "\n":
                         hl = True
                         tp += 1
@@ -303,7 +401,11 @@ def _parse_multiline_basic_string(state):
                 if hl:
                     state.pos[0] = tp
                     for _ in range(n - state.pos[0]):
-                        if state.pos[0] < n and d[state.pos[0]] in " \t\r\n":
+                        if state.pos[0] < n and d[state.pos[0]] in " \t":
+                            state.pos[0] += 1
+                        elif state.pos[0] + 1 < n and d[state.pos[0]] == "\r" and d[state.pos[0] + 1] == "\n":
+                            state.pos[0] += 2
+                        elif state.pos[0] < n and d[state.pos[0]] == "\n":
                             state.pos[0] += 1
                         else:
                             break
@@ -318,7 +420,6 @@ def _parse_multiline_basic_string(state):
                 state.pos[0] += 1
                 hs = d[state.pos[0]:state.pos[0] + sz]
                 if len(hs) == sz and _is_hex(hs):
-                    # Check code point validity
                     code = int(hs, 16)
                     if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
                         chars.append(_codepoint_to_string(code))
@@ -326,7 +427,46 @@ def _parse_multiline_basic_string(state):
                         continue
             _fail(state, "Invalid escape")
             return ""
-        if (c < " " and c not in "\t\n\r") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
+
+        blen = 0
+        if c <= "\177":
+            blen = 1
+        elif c >= "\302" and c <= "\337":
+            blen = 2
+        elif c >= "\340" and c <= "\357":
+            blen = 3
+            if c == "\355" and p + 1 < n:
+                nc = d[p + 1]
+                if nc >= "\240" and nc <= "\277":
+                    _fail(state, "Surrogate in multiline basic")
+                    return ""
+        elif c >= "\360" and c <= "\364":
+            blen = 4
+        else:
+            _fail(state, "Invalid UTF-8 in multiline basic")
+            return ""
+        if blen > 1:
+            valid = True
+            for j in range(1, blen):
+                if p + j >= n or not (d[p + j] >= "\200" and d[p + j] <= "\277"):
+                    valid = False
+                    break
+            if not valid:
+                _fail(state, "Truncated UTF-8 in multiline basic")
+                return ""
+            chars.append(d[p:p + blen])
+            state.pos[0] += blen
+            continue
+
+        if c == "\r":
+            if p + 1 < n and d[p + 1] == "\n":
+                chars.append("\n")
+                state.pos[0] += 2
+                continue
+            else:
+                _fail(state, "Bare CR in multiline")
+                return ""
+        if (c < " " and c not in ["\n", "\t"]) or c == _DEL:
             _fail(state, "Control char in multiline")
             return ""
         chars.append(c)
@@ -337,6 +477,8 @@ def _parse_multiline_literal_string(state):
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
+    elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
+        state.pos[0] += 2
     p = state.pos[0]
     d = state.data
     idx = d.find("'''", p)
@@ -344,17 +486,59 @@ def _parse_multiline_literal_string(state):
         _fail(state, "Unterminated multiline literal string")
         return ""
     ex = 0
-    for i in range(1, 3):
+    for i in range(1, 4):
         if idx + 3 + i <= state.len and d[idx + 3:idx + 3 + i] == "'" * i:
             ex = i
+    if ex > 2:
+        ex = 2
     content = d[p:idx + ex]
-    for i in range(len(content)):
+    res = []
+    i = 0
+    n_content = len(content)
+    for _ in range(n_content):
+        if i >= n_content:
+            break
         c = content[i]
-        if (c < " " and c not in "\t\n\r") or c == _DEL or c == _REPLACEMENT or (c >= _SURROGATE_LOW and c <= _SURROGATE_HIGH):
+        if c == "\r":
+            if i + 1 < n_content and content[i + 1] == "\n":
+                res.append("\n")
+                i += 2
+                continue
+            else:
+                _fail(state, "Bare CR in multiline literal")
+                return ""
+        if (c < " " and c not in ["\n", "\t"]) or c == _DEL:
             _fail(state, "Control char in multiline literal")
             return ""
+        blen = 0
+        if c <= "\177":
+            blen = 1
+        elif c >= "\302" and c <= "\337":
+            blen = 2
+        elif c >= "\340" and c <= "\357":
+            blen = 3
+            if c == "\355" and i + 1 < n_content:
+                nc = content[i + 1]
+                if nc >= "\240" and nc <= "\277":
+                    _fail(state, "Surrogate in multiline literal")
+                    return ""
+        elif c >= "\360" and c <= "\364":
+            blen = 4
+        else:
+            _fail(state, "Invalid UTF-8 in multiline literal")
+            return ""
+        if blen > 1:
+            for j in range(1, blen):
+                if i + j >= n_content or not (content[i + j] >= "\200" and content[i + j] <= "\277"):
+                    _fail(state, "Truncated UTF-8 in multiline literal")
+                    return ""
+            res.append(content[i:i + blen])
+            i += blen
+            continue
+        res.append(c)
+        i += 1
     state.pos[0] = idx + 3 + ex
-    return content
+    return "".join(res)
 
 def _parse_string(state):
     p = state.pos[0]
@@ -371,11 +555,7 @@ def _parse_string(state):
         return _parse_literal_string(state)
     return ""
 
-# --- Key & Value Parsing ---
-
 def _parse_key(state):
-    if _has_error(state):
-        return ""
     p = state.pos[0]
     d = state.data
     if d[p] == '"':
@@ -487,8 +667,6 @@ def _parse_table(state):
     state.current_table[0] = _get_or_create_table(state, ks, is_a)
 
 def _parse_key_value(state, target):
-    if _has_error(state):
-        return
     ks = _parse_dotted_key(state)
     if _has_error(state) or not ks:
         return
@@ -527,8 +705,6 @@ def _parse_key_value(state, target):
         return
     curr[lk] = val
     state.path_types[ltp] = "inline" if type(val) == "dict" else ("array" if type(val) == "list" else "scalar")
-
-# --- Scalar Parsing ---
 
 def _parse_time_manual(state):
     p = state.pos[0]
@@ -594,7 +770,7 @@ def _parse_scalar(state):
                             return struct(toml_type = "datetime", value = (vs + ch).replace(" ", "T").replace("t", "T"))
                 return struct(toml_type = "datetime-local", value = vs.replace(" ", "T").replace("t", "T"))
             else:
-                state.pos[0] -= 1  # Backtrack
+                state.pos[0] -= 1
         return struct(toml_type = "date-local", value = ds)
     tr = _parse_time_manual(state)
     if tr:
@@ -635,8 +811,6 @@ def _parse_scalar(state):
         state.pos[0] += len(m.group())
         return int(m.group().replace("_", ""))
     return None
-
-# --- Complex Iterative Parser ---
 
 _MODE_ARRAY_VAL = 1
 _MODE_ARRAY_COMMA = 2
@@ -782,14 +956,25 @@ def _skip_ws_nl(state):
         if state.pos[0] >= n:
             break
         c = d[state.pos[0]]
-        if c in " \t\n\r":
+        if c in " \t":
             state.pos[0] += 1
             continue
+        if c == "\n":
+            state.pos[0] += 1
+            continue
+        if c == "\r":
+            if state.pos[0] + 1 < n and d[state.pos[0] + 1] == "\n":
+                state.pos[0] += 2
+                continue
+            else:
+                _fail(state, "Bare CR in ws_nl")
+                break
         if c == "#":
             for _ in range(n - state.pos[0]):
                 if state.pos[0] >= n or d[state.pos[0]] == "\n":
                     break
-                if d[state.pos[0]] < " " and d[state.pos[0]] != "\t":
+                cc = d[state.pos[0]]
+                if cc < " " and cc not in ["\n", "\t", "\r"]:
                     _fail(state, "Invalid comment cc")
                     break
                 state.pos[0] += 1
@@ -797,8 +982,6 @@ def _skip_ws_nl(state):
                 break
             continue
         break
-
-# --- Expansion for toml-test ---
 
 def _format_scalar_for_test(v):
     t = type(v)
@@ -837,8 +1020,6 @@ def _expand_to_toml_test(raw):
                     t.append(_format_scalar_for_test(v))
     return root
 
-# --- Main API ---
-
 def _parse_value(state):
     c = state.data[state.pos[0]]
     if c in "[{":
@@ -851,15 +1032,16 @@ def _parse_value(state):
     return res
 
 def decode_internal(data, default = None, expand_values = False):
-    """Decodes a TOML string.
+    """Decodes a TOML string into a Starlark structure.
 
     Args:
-      data: The TOML string.
-      default: Optional value on error.
-      expand_values: If True, returns toml-test structure.
+      data: The TOML string to decode.
+      default: Optional value to return if parsing fails. If None, the parser will fail.
+      expand_values: If True, returns values in the toml-test JSON-compatible format
+        (e.g., {"type": "integer", "value": "123"}).
 
     Returns:
-      The decoded value.
+      The decoded Starlark structure (dict/list) or the default value on error.
     """
     state = _parser(data, default)
     for _ in range(len(data) + 1):
@@ -872,6 +1054,13 @@ def decode_internal(data, default = None, expand_values = False):
         if state.data[p] == "\n":
             state.pos[0] += 1
             continue
+        if state.data[p] == "\r":
+            if p + 1 < state.len and state.data[p + 1] == "\n":
+                state.pos[0] += 2
+                continue
+            else:
+                _fail(state, "Bare CR in root")
+                break
         if state.data[p] == "[":
             _parse_table(state)
         else:
@@ -880,9 +1069,19 @@ def decode_internal(data, default = None, expand_values = False):
             break
         _skip_ws(state)
         p2 = state.pos[0]
-        if p2 < state.len and state.data[p2] != "\n":
-            _fail(state, "Newline required after pair")
-            break
+        if p2 < state.len:
+            curr_c = state.data[p2]
+            if curr_c == "\n":
+                pass
+            elif curr_c == "\r":
+                if p2 + 1 < state.len and state.data[p2 + 1] == "\n":
+                    pass
+                else:
+                    _fail(state, "Bare CR after pair")
+                    break
+            else:
+                _fail(state, "Newline required after pair")
+                break
     if _has_error(state):
         return default
     return _expand_to_toml_test(state.root) if expand_values else state.root
