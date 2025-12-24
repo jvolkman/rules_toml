@@ -3,13 +3,11 @@
 load("@re.bzl", "re")
 
 # --- Tokens ---
-_RE_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+")
 _RE_INTEGER = re.compile(r"^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)")
 _RE_HEX = re.compile(r"^0x[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*")
 _RE_OCT = re.compile(r"^0o[0-7]+(?:_[0-7]+)*")
 _RE_BIN = re.compile(r"^0b[01]+(?:_[01]+)*")
 _RE_FLOAT = re.compile(r"^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)(?:\.[0-9](?:[0-9]|_[0-9])*)?(?:[eE][+-]?[0-9](?:[0-9]|_[0-9])*)?")
-_RE_BOOLEAN = re.compile(r"^(?:true|false)")
 _RE_LOCAL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 _DEL = "\177"
@@ -467,11 +465,26 @@ def _parse_key(state):
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_literal_string(state)
-    m = _RE_BARE_KEY.match(d[p:])
-    if m:
-        key = m.group()
-        state.pos[0] += len(key)
+    p = state.pos[0]
+    d = state.data
+    n = state.len
+
+    # Hand-parse bare keys: [A-Za-z0-9_-]+
+    start = p
+    for _ in range(n - p):
+        if p >= n:
+            break
+        c = d[p]
+        if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_" or c == "-":
+            p += 1
+            continue
+        break
+
+    if p > start:
+        key = d[start:p]
+        state.pos[0] = p
         return key
+
     _fail(state, "Invalid key format")
     return ""
 
@@ -638,7 +651,40 @@ def _parse_scalar(state):
     p = state.pos[0]
     d = state.data
     n = state.len
-    m = _RE_LOCAL_DATE.match(d[p:])
+
+    # Fast-path Booleans
+    if d[p:p + 4] == "true":
+        state.pos[0] += 4
+        return True
+    if d[p:p + 5] == "false":
+        state.pos[0] += 5
+        return False
+
+    # Fast-path Inf/NaN
+    # Check for inf, nan, +inf, -inf, etc. without sub = d[p:]
+    c = d[p]
+    if c == "n":
+        if d[p:p + 3] == "nan":
+            state.pos[0] += 3
+            return struct(toml_type = "float", value = "nan")
+    elif c == "i":
+        if d[p:p + 3] == "inf":
+            state.pos[0] += 3
+            return struct(toml_type = "float", value = "inf")
+    elif c == "+" or c == "-":
+        if d[p + 1:p + 4] == "nan":
+            state.pos[0] += 4
+            return struct(toml_type = "float", value = "nan")
+        if d[p + 1:p + 4] == "inf":
+            state.pos[0] += 4
+            return struct(toml_type = "float", value = "-inf" if c == "-" else "inf")
+
+    # For regex matching, use a window of 128 characters to avoid slicing the remainder of the file.
+    # 128 is plenty for any valid TOML scalar (Dates, Floats, Hex, etc).
+    window = d[p:p + 128]
+
+    # Try Dates (Local Date)
+    m = _RE_LOCAL_DATE.match(window)
     if m:
         ds = m.group()
         state.pos[0] += len(ds)
@@ -671,6 +717,8 @@ def _parse_scalar(state):
             else:
                 state.pos[0] -= 1
         return struct(toml_type = "date-local", value = ds)
+
+    # Try Time (Local Time)
     tr = _parse_time_manual(state)
     if tr:
         ts, tl = tr
@@ -678,37 +726,40 @@ def _parse_scalar(state):
         if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
             return None
         return struct(toml_type = "time-local", value = ts)
-    m = _RE_BOOLEAN.match(d[p:])
-    if m:
-        state.pos[0] += len(m.group())
-        return m.group() == "true"
-    sub = d[p:]
-    if sub.startswith(("inf", "+inf", "-inf", "nan", "+nan", "-nan")):
-        ln = 4 if sub[0] in "+-" else 3
-        v = d[p:p + ln]
-        state.pos[0] += ln
-        return struct(toml_type = "float", value = "nan" if "nan" in v else ("-inf" if v[0] == "-" else "inf"))
-    m = _RE_FLOAT.match(d[p:])
+
+    # Floats (checking '.' or 'e' to distinguish from integers)
+    m = _RE_FLOAT.match(window)
     if m and ("." in m.group() or "e" in m.group() or "E" in m.group()):
         v = m.group()
         state.pos[0] += len(v)
         return float(v.replace("_", ""))
-    m = _RE_HEX.match(d[p:])
+
+    # Integers (Hex, Oct, Bin, Dec)
+    if window.startswith("0x"):
+        m = _RE_HEX.match(window)
+        if m:
+            v = m.group()
+            state.pos[0] += len(v)
+            return int(v.replace("_", ""), 16)
+    elif window.startswith("0o"):
+        m = _RE_OCT.match(window)
+        if m:
+            v = m.group()
+            state.pos[0] += len(v)
+            return int(v.replace("_", ""), 8)
+    elif window.startswith("0b"):
+        m = _RE_BIN.match(window)
+        if m:
+            v = m.group()
+            state.pos[0] += len(v)
+            return int(v.replace("_", ""), 2)
+
+    m = _RE_INTEGER.match(window)
     if m:
-        state.pos[0] += len(m.group())
-        return int(m.group().replace("_", ""), 16)
-    m = _RE_OCT.match(d[p:])
-    if m:
-        state.pos[0] += len(m.group())
-        return int(m.group().replace("_", ""), 8)
-    m = _RE_BIN.match(d[p:])
-    if m:
-        state.pos[0] += len(m.group())
-        return int(m.group().replace("_", ""), 2)
-    m = _RE_INTEGER.match(d[p:])
-    if m:
-        state.pos[0] += len(m.group())
-        return int(m.group().replace("_", ""))
+        v = m.group()
+        state.pos[0] += len(v)
+        return int(v.replace("_", ""))
+
     return None
 
 _MODE_ARRAY_VAL = 1
