@@ -1,5 +1,5 @@
 bazel_dep(name = "aspect_bazel_lib", version = "2.14.0")
-bazel_dep(name = "toml.bzl", version = "0.0.0")
+bazel_dep(name = "toml.bzl", version = "0.1.0")
 bazel_dep(name = "stardoc", version = "0.8.0", repo_name = "io_bazel_stardoc")
 bazel_dep(name = "platforms", version = "1.0.0")
 
@@ -15,3 +15,10 @@ http_jar(
     integrity = "sha256-VQuahQMiQJDjsA+Bc44v48RYPG44qFavXvsvOcM4PyM=",
     urls = ["https://github.com/alexeagle/stardoc-prebuilt/releases/download/v0.8.0/renderer_deploy.jar"],
 )
+
+git_override(
+    module_name = "re.bzl",
+    commit = "2cbb0c690e61d3c37a0593200eade3e6c0d019c4",
+    remote = "https://github.com/jvolkman/re.bzl.git",
+)
+

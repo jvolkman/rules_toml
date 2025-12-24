@@ -2,6 +2,4 @@
 
 load("//toml/private:decode.bzl", _decode = "decode")
 
-toml = struct(
-    decode = _decode,
-)
+decode = _decode
