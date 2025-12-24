@@ -4,4 +4,8 @@ bzl_library(
     name = "decode",
     srcs = ["decode.bzl"],
     visibility = ["//toml:__subpackages__"],
+    deps = [
+        "@bazel_lib//lib:strings",
+        "@re.bzl",
+    ],
 )
