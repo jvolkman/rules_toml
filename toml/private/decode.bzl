@@ -13,6 +13,7 @@ _RE_BOOLEAN = re.compile(r"^(?:true|false)")
 _RE_LOCAL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 _DEL = "\177"
+_MAX_ITERATIONS_MULTIPLIER = 5
 
 # --- Status & Error Handling ---
 
@@ -65,57 +66,19 @@ def _skip_ws(state):
             state.pos[0] += 1
             continue
         if c == "#":
-            state.pos[0] += 1
-            for _ in range(n - state.pos[0]):
-                p2 = state.pos[0]
-                if p2 >= n or d[p2] == "\n":
-                    break
-                cc = d[p2]
-                if cc == "\r":
-                    if p2 + 1 < n and d[p2 + 1] == "\n":
-                        pass
-                    else:
-                        _fail(state, "Illegal control char in comment")
-                        break
-                elif (cc < " " and cc != "\t") or cc == _DEL:
-                    _fail(state, "Illegal control char in comment")
-                    break
+            nl = d.find("\n", p)
+            end = nl if nl != -1 else n
 
-                # UTF-8 Validation
-                blen = 0
-                if cc <= "\177":
-                    blen = 1
-                elif cc >= "\302" and cc <= "\337":
-                    blen = 2
-                elif cc >= "\340" and cc <= "\357":
-                    blen = 3
-                    if cc == "\355" and p2 + 1 < n:
-                        nc = d[p2 + 1]
-                        if nc >= "\240" and nc <= "\277":
-                            _fail(state, "Surrogate in comment")
-                            break
-                elif cc >= "\360" and cc <= "\364":
-                    blen = 4
-                else:
-                    _fail(state, "Invalid UTF-8 in comment")
-                    break
-                if blen > 1:
-                    valid = True
-                    for j in range(1, blen):
-                        if p2 + j >= n or not (d[p2 + j] >= "\200" and d[p2 + j] <= "\277"):
-                            valid = False
-                            break
-                    if not valid:
-                        _fail(state, "Truncated UTF-8 in comment")
-                        break
-                    state.pos[0] += blen
-                    continue
-                state.pos[0] += 1
-            if _has_error(state):
+            # If CRLF, the CR is part of the line break, not the comment content.
+            comment_end = end
+            if comment_end > p + 1 and d[comment_end - 1] == "\r":
+                comment_end -= 1
+
+            comment = d[p + 1:comment_end]
+            if not _validate_text(state, comment, "comment", allow_nl = False):
                 break
-            idx = d.find("\n", p)
-            state.pos[0] = idx if idx != -1 else n
-            break
+            state.pos[0] = end
+            continue
         break
 
 def _expect(state, char):
@@ -131,6 +94,55 @@ def _expect(state, char):
 def _is_dict(v):
     return type(v) == "dict"
 
+def _validate_text(state, s, context, allow_nl = False):
+    n = len(s)
+    i = 0
+    for _ in range(n):
+        if i >= n:
+            break
+        c = s[i]
+
+        blen = 0
+        if c <= "\177":
+            blen = 1
+            if c == "\r":
+                if i + 1 < n and s[i + 1] == "\n":
+                    # Allow CRLF if it's a newline context
+                    if not allow_nl:
+                        _fail(state, "Control char in %s" % context)
+                        return False
+                elif allow_nl:  # Bare CR in multiline is bad
+                    _fail(state, "Bare CR in %s" % context)
+                    return False
+                else:
+                    _fail(state, "Control char in %s" % context)
+                    return False
+            elif (c < " " and c != "\t" and not (allow_nl and c == "\n")) or c == _DEL:
+                _fail(state, "Control char in %s" % context)
+                return False
+        elif c >= "\302" and c <= "\337":
+            blen = 2
+        elif c >= "\340" and c <= "\357":
+            blen = 3
+            if c == "\355" and i + 1 < n:
+                nc = s[i + 1]
+                if nc >= "\240" and nc <= "\277":
+                    _fail(state, "Surrogate in %s" % context)
+                    return False
+        elif c >= "\360" and c <= "\364":
+            blen = 4
+        else:
+            _fail(state, "Invalid UTF-8 in %s" % context)
+            return False
+
+        if blen > 1:
+            for j in range(1, blen):
+                if i + j >= n or not (s[i + j] >= "\200" and s[i + j] <= "\277"):
+                    _fail(state, "Truncated UTF-8 in %s" % context)
+                    return False
+        i += blen
+    return True
+
 def _is_hex(s):
     for i in range(len(s)):
         ch = s[i]
@@ -139,13 +151,8 @@ def _is_hex(s):
     return True
 
 def _to_hex(val, width):
-    hex_digits = "0123456789abcdef"
-    s = ""
-    for _ in range(width):
-        d = val % 16
-        val = val // 16
-        s = hex_digits[d] + s
-    return s
+    s = "%x" % val
+    return ("0" * (width - len(s))) + s if len(s) < width else s
 
 def _codepoint_to_string(code):
     if code <= 0xFFFF:
@@ -218,74 +225,60 @@ def _parse_basic_string(state):
         if p >= n:
             _fail(state, "Unterminated string")
             return ""
-        c = d[p]
-        if c == '"':
+
+        # Find next delimiter or escape
+        q_idx = d.find('"', p)
+        e_idx = d.find("\\", p)
+
+        if q_idx == -1:
+            _fail(state, "Unterminated string")
+            return ""
+
+        next_idx = q_idx
+        is_esc = False
+        if e_idx != -1 and e_idx < q_idx:
+            next_idx = e_idx
+            is_esc = True
+
+        if next_idx > p:
+            chunk = d[p:next_idx]
+            if not _validate_text(state, chunk, "string", allow_nl = False):
+                return ""
+            chars.append(chunk)
+
+        state.pos[0] = next_idx
+        if not is_esc:
             state.pos[0] += 1
             return "".join(chars)
-        if c == "\\":
-            state.pos[0] += 1
-            if state.pos[0] >= n:
-                _fail(state, "TLS")
-                return ""
-            esc = d[state.pos[0]]
-            state.pos[0] += 1
-            sm = _escape_char(esc)
-            if sm:
-                chars.append(sm)
-                continue
-            if esc == "x":
-                h2 = d[state.pos[0]:state.pos[0] + 2]
-                if len(h2) == 2 and _is_hex(h2):
-                    chars.append(_codepoint_to_string(int(h2, 16)))
-                    state.pos[0] += 2
-                    continue
-            if esc == "u" or esc == "U":
-                sz = 4 if esc == "u" else 8
-                hx = d[state.pos[0]:state.pos[0] + sz]
-                if len(hx) == sz and _is_hex(hx):
-                    code = int(hx, 16)
-                    if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
-                        chars.append(_codepoint_to_string(code))
-                        state.pos[0] += sz
-                        continue
-            _fail(state, "Invalid escape")
-            return ""
 
-        blen = 0
-        if c <= "\177":
-            blen = 1
-        elif c >= "\302" and c <= "\337":
-            blen = 2
-        elif c >= "\340" and c <= "\357":
-            blen = 3
-            if c == "\355" and p + 1 < n:
-                nc = d[p + 1]
-                if nc >= "\240" and nc <= "\277":
-                    _fail(state, "Surrogate in string")
-                    return ""
-        elif c >= "\360" and c <= "\364":
-            blen = 4
-        else:
-            _fail(state, "Invalid UTF-8 in string")
-            return ""
-        if blen > 1:
-            valid = True
-            for j in range(1, blen):
-                if p + j >= n or not (d[p + j] >= "\200" and d[p + j] <= "\277"):
-                    valid = False
-                    break
-            if not valid:
-                _fail(state, "Truncated UTF-8 in string")
-                return ""
-            chars.append(d[p:p + blen])
-            state.pos[0] += blen
-            continue
-
-        if (c < " " and c != "\t") or c == _DEL or c == "\r":
-            _fail(state, "Control char in string")
-            return ""
-        chars.append(c)
+        # Handle escape
         state.pos[0] += 1
+        if state.pos[0] >= n:
+            _fail(state, "TLS")
+            return ""
+        esc = d[state.pos[0]]
+        state.pos[0] += 1
+        sm = _escape_char(esc)
+        if sm:
+            chars.append(sm)
+            continue
+        if esc == "x":
+            h2 = d[state.pos[0]:state.pos[0] + 2]
+            if len(h2) == 2 and _is_hex(h2):
+                chars.append(_codepoint_to_string(int(h2, 16)))
+                state.pos[0] += 2
+                continue
+        if esc == "u" or esc == "U":
+            sz = 4 if esc == "u" else 8
+            hx = d[state.pos[0]:state.pos[0] + sz]
+            if len(hx) == sz and _is_hex(hx):
+                code = int(hx, 16)
+                if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
+                    chars.append(_codepoint_to_string(code))
+                    state.pos[0] += sz
+                    continue
+        _fail(state, "Invalid escape")
+        return ""
     return ""
 
 def _parse_literal_string(state):
@@ -299,42 +292,8 @@ def _parse_literal_string(state):
         _fail(state, "Unterminated literal string")
         return ""
     content = d[p:idx]
-    if "\n" in content:
-        _fail(state, "Newline in literal string")
+    if not _validate_text(state, content, "literal string", allow_nl = False):
         return ""
-
-    i = 0
-    n_content = len(content)
-    for _ in range(n_content):
-        if i >= n_content:
-            break
-        c = content[i]
-        if (c < " " and c != "\t") or c == _DEL or c == "\r":
-            _fail(state, "Control char in literal string")
-            return ""
-        blen = 0
-        if c <= "\177":
-            blen = 1
-        elif c >= "\302" and c <= "\337":
-            blen = 2
-        elif c >= "\340" and c <= "\357":
-            blen = 3
-            if c == "\355" and i + 1 < n_content:
-                nc = content[i + 1]
-                if nc >= "\240" and nc <= "\277":
-                    _fail(state, "Surrogate in literal string")
-                    return ""
-        elif c >= "\360" and c <= "\364":
-            blen = 4
-        else:
-            _fail(state, "Invalid UTF-8 in literal string")
-            return ""
-        if blen > 1:
-            for j in range(1, blen):
-                if i + j >= n_content or not (content[i + j] >= "\200" and content[i + j] <= "\277"):
-                    _fail(state, "Truncated UTF-8 in literal string")
-                    return ""
-        i += blen
     state.pos[0] = idx + 1
     return content
 
@@ -344,6 +303,7 @@ def _parse_multiline_basic_string(state):
         state.pos[0] += 1
     elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
         state.pos[0] += 2
+
     chars = []
     d = state.data
     n = state.len
@@ -352,125 +312,101 @@ def _parse_multiline_basic_string(state):
         if p >= n:
             _fail(state, "Unterminated multiline string")
             return ""
-        c = d[p]
-        if c == '"':
-            cnt = 0
-            for i in range(5):
-                if p + i < n and d[p + i] == '"':
-                    cnt += 1
+
+        # Find next " or \
+        q_idx = d.find('"""', p)
+        e_idx = d.find("\\", p)
+
+        if q_idx == -1:
+            _fail(state, "Unterminated multiline string")
+            return ""
+
+        next_idx = q_idx
+        is_esc = False
+        if e_idx != -1 and e_idx < q_idx:
+            next_idx = e_idx
+            is_esc = True
+
+        if next_idx > p:
+            chunk = d[p:next_idx]
+            if not _validate_text(state, chunk, "multiline basic", allow_nl = True):
+                return ""
+
+            # Normalize CRLF to LF, and check for bare CR (handled by _validate_text)
+            chunk = chunk.replace("\r\n", "\n")
+            chars.append(chunk)
+
+        state.pos[0] = next_idx
+        if not is_esc:
+            # Handle potential trailing quotes
+            state.pos[0] += 3
+            ex = 0
+            for _ in range(1, 3):
+                if state.pos[0] < n and d[state.pos[0]] == '"':
+                    ex += 1
+                    state.pos[0] += 1
                 else:
                     break
-            if cnt >= 3:
-                ex = 0
-                for i in range(1, 4):
-                    if p + 3 + i <= n and d[p + 3:p + 3 + i] == '"' * i:
-                        ex = i
-                if ex > 2:
-                    ex = 2
-                for _ in range(ex):
-                    chars.append('"')
-                state.pos[0] += 3 + ex
-                return "".join(chars)
-            for _ in range(cnt):
+            for _ in range(ex):
                 chars.append('"')
-            state.pos[0] += cnt
-            continue
-        if c == "\\":
-            state.pos[0] += 1
-            if state.pos[0] >= n:
-                break
-            esc = d[state.pos[0]]
-            if esc in " \t\r\n":
-                tp = state.pos[0]
-                hl = False
+            return "".join(chars)
+
+        # Handle escape
+        state.pos[0] += 1
+        if state.pos[0] >= n:
+            break
+        esc = d[state.pos[0]]
+        if esc in " \t\r\n":
+            # line-ending backslash
+            tp = state.pos[0]
+            hl = False
+
+            # Scan for first newline
+            for _ in range(n - tp):
+                if tp >= n:
+                    break
+                if tp + 1 < n and d[tp] == "\r" and d[tp + 1] == "\n":
+                    hl = True
+                    tp += 2
+                    break
+                if d[tp] == "\n":
+                    hl = True
+                    tp += 1
+                    break
+                if d[tp] in " \t\r":
+                    tp += 1
+                else:
+                    break
+            if hl:
+                # Skip all subsequent whitespace/newlines
                 for _ in range(n - tp):
                     if tp >= n:
                         break
                     if tp + 1 < n and d[tp] == "\r" and d[tp + 1] == "\n":
-                        hl = True
                         tp += 2
-                        break
-                    if d[tp] == "\n":
-                        hl = True
-                        tp += 1
-                        break
-                    if d[tp] in " \t\r":
+                    elif d[tp] in " \t\n":
                         tp += 1
                     else:
                         break
-                if hl:
-                    state.pos[0] = tp
-                    for _ in range(n - state.pos[0]):
-                        if state.pos[0] < n and d[state.pos[0]] in " \t":
-                            state.pos[0] += 1
-                        elif state.pos[0] + 1 < n and d[state.pos[0]] == "\r" and d[state.pos[0] + 1] == "\n":
-                            state.pos[0] += 2
-                        elif state.pos[0] < n and d[state.pos[0]] == "\n":
-                            state.pos[0] += 1
-                        else:
-                            break
-                    continue
-            sm = _escape_char(esc)
-            if sm:
-                chars.append(sm)
-                state.pos[0] += 1
+                state.pos[0] = tp
                 continue
-            if esc in "uUx":
-                sz = 2 if esc == "x" else (4 if esc == "u" else 8)
-                state.pos[0] += 1
-                hs = d[state.pos[0]:state.pos[0] + sz]
-                if len(hs) == sz and _is_hex(hs):
-                    code = int(hs, 16)
-                    if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
-                        chars.append(_codepoint_to_string(code))
-                        state.pos[0] += sz
-                        continue
-            _fail(state, "Invalid escape")
-            return ""
-
-        blen = 0
-        if c <= "\177":
-            blen = 1
-        elif c >= "\302" and c <= "\337":
-            blen = 2
-        elif c >= "\340" and c <= "\357":
-            blen = 3
-            if c == "\355" and p + 1 < n:
-                nc = d[p + 1]
-                if nc >= "\240" and nc <= "\277":
-                    _fail(state, "Surrogate in multiline basic")
-                    return ""
-        elif c >= "\360" and c <= "\364":
-            blen = 4
-        else:
-            _fail(state, "Invalid UTF-8 in multiline basic")
-            return ""
-        if blen > 1:
-            valid = True
-            for j in range(1, blen):
-                if p + j >= n or not (d[p + j] >= "\200" and d[p + j] <= "\277"):
-                    valid = False
-                    break
-            if not valid:
-                _fail(state, "Truncated UTF-8 in multiline basic")
-                return ""
-            chars.append(d[p:p + blen])
-            state.pos[0] += blen
+        sm = _escape_char(esc)
+        if sm:
+            chars.append(sm)
+            state.pos[0] += 1
             continue
-
-        if c == "\r":
-            if p + 1 < n and d[p + 1] == "\n":
-                chars.append("\n")
-                state.pos[0] += 2
-                continue
-            else:
-                _fail(state, "Bare CR in multiline")
-                return ""
-        if (c < " " and c not in ["\n", "\t"]) or c == _DEL:
-            _fail(state, "Control char in multiline")
-            return ""
-        chars.append(c)
-        state.pos[0] += 1
+        if esc in "uUx":
+            sz = 2 if esc == "x" else (4 if esc == "u" else 8)
+            state.pos[0] += 1
+            hs = d[state.pos[0]:state.pos[0] + sz]
+            if len(hs) == sz and _is_hex(hs):
+                code = int(hs, 16)
+                if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
+                    chars.append(_codepoint_to_string(code))
+                    state.pos[0] += sz
+                    continue
+        _fail(state, "Invalid escape")
+        return ""
     return ""
 
 def _parse_multiline_literal_string(state):
@@ -479,66 +415,29 @@ def _parse_multiline_literal_string(state):
         state.pos[0] += 1
     elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
         state.pos[0] += 2
+
     p = state.pos[0]
     d = state.data
     idx = d.find("'''", p)
     if idx == -1:
         _fail(state, "Unterminated multiline literal string")
         return ""
+
+    # Handle potential trailing quotes
     ex = 0
-    for i in range(1, 4):
-        if idx + 3 + i <= state.len and d[idx + 3:idx + 3 + i] == "'" * i:
-            ex = i
-    if ex > 2:
-        ex = 2
-    content = d[p:idx + ex]
-    res = []
-    i = 0
-    n_content = len(content)
-    for _ in range(n_content):
-        if i >= n_content:
-            break
-        c = content[i]
-        if c == "\r":
-            if i + 1 < n_content and content[i + 1] == "\n":
-                res.append("\n")
-                i += 2
-                continue
-            else:
-                _fail(state, "Bare CR in multiline literal")
-                return ""
-        if (c < " " and c not in ["\n", "\t"]) or c == _DEL:
-            _fail(state, "Control char in multiline literal")
-            return ""
-        blen = 0
-        if c <= "\177":
-            blen = 1
-        elif c >= "\302" and c <= "\337":
-            blen = 2
-        elif c >= "\340" and c <= "\357":
-            blen = 3
-            if c == "\355" and i + 1 < n_content:
-                nc = content[i + 1]
-                if nc >= "\240" and nc <= "\277":
-                    _fail(state, "Surrogate in multiline literal")
-                    return ""
-        elif c >= "\360" and c <= "\364":
-            blen = 4
+    for _ in range(1, 3):
+        if idx + 3 + _ <= state.len and d[idx + 3:idx + 3 + _] == "'" * _:
+            ex = _
         else:
-            _fail(state, "Invalid UTF-8 in multiline literal")
-            return ""
-        if blen > 1:
-            for j in range(1, blen):
-                if i + j >= n_content or not (content[i + j] >= "\200" and content[i + j] <= "\277"):
-                    _fail(state, "Truncated UTF-8 in multiline literal")
-                    return ""
-            res.append(content[i:i + blen])
-            i += blen
-            continue
-        res.append(c)
-        i += 1
+            break
+    content = d[p:idx + ex]
+    if not _validate_text(state, content, "multiline literal", allow_nl = True):
+        return ""
+
+    # Normalize CRLF to LF, and check for bare CR (handled by _validate_text)
+    res = content.replace("\r\n", "\n")
     state.pos[0] = idx + 3 + ex
-    return "".join(res)
+    return res
 
 def _parse_string(state):
     p = state.pos[0]
@@ -823,7 +722,7 @@ def _parse_complex_iterative(state):
     res = [] if c == "[" else {}
     stack = [[res, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}]]
     state.pos[0] += 1
-    for _ in range(state.len * 5):
+    for _ in range(state.len * _MAX_ITERATIONS_MULTIPLIER):
         if not stack or _has_error(state):
             break
         fr = stack[-1]
@@ -997,10 +896,10 @@ def _format_scalar_for_test(v):
         return {"type": v.toml_type, "value": v.value}
     return None
 
-def _expand_to_toml_test(raw):
+def _expand_to_toml_test(raw, size_hint):
     root = {} if type(raw) == "dict" else []
     stack = [[raw, root]]
-    for _ in range(100000):
+    for _ in range(size_hint * 2 + 100):
         if not stack:
             break
         r, t = stack.pop()
@@ -1084,4 +983,4 @@ def decode_internal(data, default = None, expand_values = False):
                 break
     if _has_error(state):
         return default
-    return _expand_to_toml_test(state.root) if expand_values else state.root
+    return _expand_to_toml_test(state.root, len(data)) if expand_values else state.root
