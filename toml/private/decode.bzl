@@ -991,7 +991,7 @@ def _parse_value(state):
         _fail(state, "Value expected")
     return res
 
-def decode_internal(data, default = None, expand_values = False):
+def decode(data, default = None, expand_values = False):
     """Decodes a TOML string into a Starlark structure.
 
     Args:

@@ -3,7 +3,7 @@
 load("@bazel_lib//lib:base64.bzl", "base64")
 load("@rules_testing//lib:unit_test.bzl", "unit_test")
 load("@toml_test_suite//:tests.bzl", "invalid_cases", "valid_cases")
-load("//toml/private:decode.bzl", "decode_internal")
+load("//toml/private:decode.bzl", "decode")
 
 FAIL_DEFAULT = {"rules_toml_fail": True}
 
@@ -68,7 +68,7 @@ def _compare(a, b):
 
 def _toml_test_node_impl(env, case, is_valid):
     input_data = base64.decode(case.input_b64)
-    actual = decode_internal(input_data, default = FAIL_DEFAULT, expand_values = True)
+    actual = decode(input_data, default = FAIL_DEFAULT, expand_values = True)
 
     if is_valid:
         expected = json.decode(base64.decode(case.expected_b64))
