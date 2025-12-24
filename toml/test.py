@@ -1,6 +1,15 @@
-"""TOML decoder."""
+# Bazel compatability
+from types import SimpleNamespace
+struct = SimpleNamespace
 
-load("@bazel_lib//lib:strings.bzl", "chr")
+def fail(msg):
+    raise Exception(msg)
+
+
+
+
+
+
 
 WS = " \t"
 WS_AND_NEWLINE = WS + "\n"
@@ -148,6 +157,7 @@ def decode_internal(data, default = None, expand_values = False):
     # Skip any preliminary whitespace and comments
     _skip_ws_and_comments(buf, errors)
 
+
     td = "  abc 123"
     tdbuf = _buffer(td)
     print("len", tdbuf.length(), "pos", tdbuf.pos())
@@ -164,3 +174,6 @@ def decode_internal(data, default = None, expand_values = False):
 
 def decode(data, default = None):
     return decode_internal(data, default = default)
+
+
+decode("foo")

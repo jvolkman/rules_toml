@@ -1,0 +1,11 @@
+"""
+Build tools.
+"""
+
+load("@bazelrc-preset.bzl", "bazelrc_preset")
+
+package(default_visibility = ["//visibility:public"])
+
+bazelrc_preset(
+    name = "preset",
+)

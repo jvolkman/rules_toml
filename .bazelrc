@@ -1,20 +1,14 @@
-# Bazel settings that apply to this repository.
-# Take care to document any settings that you expect users to apply.
-# Settings that apply only to CI are in .github/workflows/ci.bazelrc
+########################
+# Import bazelrc presets
+import %workspace%/tools/preset.bazelrc
 
-# Required until this is the default; expected in Bazel 7
-common --enable_bzlmod
+########################
+# Project-specific flags
+# This is also a place to override settings from the presets
 
-# Don’t want to push a rules author to update their deps if not needed.
-# https://bazel.build/reference/command-line-reference#flag--check_direct_dependencies
-# https://bazelbuild.slack.com/archives/C014RARENH0/p1691158021917459?thread_ts=1691156601.420349&cid=C014RARENH0
-common --check_direct_dependencies=off
-
-# Load any settings specific to the current user.
-# .bazelrc.user should appear in .gitignore so that settings are not shared with team members
-# This needs to be last statement in this
-# config, as the user configuration should be able to overwrite flags from this file.
-# See https://docs.bazel.build/versions/master/best-practices.html#bazelrc
-# (Note that we use .bazelrc.user so the file appears next to .bazelrc in directory listing,
-# rather than user.bazelrc as suggested in the Bazel docs)
-try-import %workspace%/.bazelrc.user
+########################
+# User preferences
+# Load any settings & overrides specific to the current user from `user.bazelrc`.
+# This file should appear in `.gitignore` so that settings are not shared with team members.
+# This should be last statement in this config so the user configuration overrides anything above.
+try-import %workspace%/user.bazelrc

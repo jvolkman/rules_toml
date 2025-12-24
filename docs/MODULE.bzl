@@ -1,0 +1,17 @@
+bazel_dep(name = "aspect_bazel_lib", version = "2.14.0")
+bazel_dep(name = "toml.bzl", version = "0.0.0")
+bazel_dep(name = "stardoc", version = "0.8.0", repo_name = "io_bazel_stardoc")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+local_path_override(
+    module_name = "toml.bzl",
+    path = "..",
+)
+
+http_jar = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_jar")
+
+http_jar(
+    name = "stardoc-prebuilt",
+    integrity = "sha256-VQuahQMiQJDjsA+Bc44v48RYPG44qFavXvsvOcM4PyM=",
+    urls = ["https://github.com/alexeagle/stardoc-prebuilt/releases/download/v0.8.0/renderer_deploy.jar"],
+)

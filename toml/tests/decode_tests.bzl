@@ -1,8 +1,8 @@
 """Test rules to run the TOML test suite."""
 
-load("//toml/private:decode.bzl", "decode_internal")
-load("@aspect_bazel_lib//lib:base64.bzl", "base64")
+load("@bazel_lib//lib:base64.bzl", "base64")
 load("@toml_test_suite//:tests.bzl", "invalid_cases", "valid_cases")
+load("//toml/private:decode.bzl", "decode_internal")
 
 FAIL_DEFAULT = {"rules_toml_fail": True}
 

@@ -1,5 +1,0 @@
-# Override http_archive for local testing
-local_repository(
-    name = "rules_toml",
-    path = "../..",
-)

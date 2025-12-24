@@ -1,8 +1,8 @@
 """Rule to download the TOML test suite and export its test cases."""
 
-load("@aspect_bazel_lib//lib:base64.bzl", "base64")
-load("@bazel_tools//tools/build_defs/repo:utils.bzl", "update_attrs")
+load("@bazel_lib//lib:base64.bzl", "base64")
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "update_attrs")
 
 TOML_VERSION = "1.1.0"
 

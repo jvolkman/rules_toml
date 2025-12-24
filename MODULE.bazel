@@ -1,23 +1,24 @@
 "Bazel dependencies"
 
 module(
-    name = "rules_toml",
+    name = "toml.bzl",
     version = "0.0.0",
     compatibility_level = 1,
 )
 
-bazel_dep(name = "aspect_bazel_lib", version = "1.32.1")
-bazel_dep(name = "bazel_skylib", version = "1.4.1")
+bazel_dep(name = "bazel_lib", version = "3.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
-bazel_dep(name = "gazelle", version = "0.29.0", dev_dependency = True, repo_name = "bazel_gazelle")
-bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.4.1", dev_dependency = True)
-bazel_dep(name = "buildifier_prebuilt", version = "6.1.2", dev_dependency = True)
-bazel_dep(name = "rules_testing", version = "0.5.0", dev_dependency = True)
+bazel_dep(name = "gazelle", version = "0.47.0", dev_dependency = True, repo_name = "bazel_gazelle")
+bazel_dep(name = "bazel_skylib_gazelle_plugin", version = "1.9.0", dev_dependency = True)
+bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1", dev_dependency = True)
+bazel_dep(name = "rules_testing", version = "0.9.0", dev_dependency = True)
+bazel_dep(name = "bazelrc-preset.bzl", version = "1.8.0", dev_dependency = True)
 
 test_suite = use_repo_rule("//toml/tests:test_suite_repo.bzl", "test_suite")
 
 test_suite(
     name = "toml_test_suite",
-    integrity = "sha256-NxcWN3dJQBYkOkcmFQC7vtalnIniMvn5abPdhJwS22M=",
-    url = "https://github.com/toml-lang/toml-test/archive/refs/tags/v1.4.0.tar.gz",
+    integrity = "",
+    url = "https://github.com/toml-lang/toml-test/archive/229ce2e7bb565d1704eac5f41e939870d4b1bce7.tar.gz",
 )
