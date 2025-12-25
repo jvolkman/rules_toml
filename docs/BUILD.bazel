@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:docs.bzl", "stardoc_with_diff_test", "update_docs")
 
+# buildifier: disable=native-java-binary
 java_binary(
     name = "renderer",
     main_class = "com/google/devtools/build/stardoc/renderer/RendererMain",
