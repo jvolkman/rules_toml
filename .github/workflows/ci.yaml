@@ -17,17 +17,18 @@ concurrency:
 
 jobs:
   test:
-    uses: bazel-contrib/.github/.github/workflows/bazel.yaml@b134b73fcae522bc77dcc03533d3de20b45714bf
-    with:
-      folders: |
-        [
-          ".",
-          "e2e/smoke"
-        ]
-      exclude: |
-        [
-          {"folder": ".", "bzlmodEnabled": false},
-          {"bazelversion": "5.4.0", "bzlmodEnabled": true},
-          {"bazelversion": "5.4.0", "os": "macos-latest"},
-          {"bazelversion": "5.4.0", "os": "windows-latest"},
-        ]
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Run Tests
+        run: bazel test --config=ci //...
+
+      - name: Run Doc Tests
+        run: bazel test //...
+        working-directory: docs
