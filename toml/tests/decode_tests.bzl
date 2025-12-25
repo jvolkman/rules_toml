@@ -5,7 +5,7 @@ load("@rules_testing//lib:unit_test.bzl", "unit_test")
 load("@toml_test_suite//:tests.bzl", "invalid_cases", "valid_cases")
 load("//toml/private:decode.bzl", "decode")
 
-FAIL_DEFAULT = {"rules_toml_fail": True}
+FAIL_DEFAULT = {"toml_bzl_fail": True}
 
 def _normalize_datetime(s):
     if "." not in s:
