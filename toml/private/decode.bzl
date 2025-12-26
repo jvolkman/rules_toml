@@ -12,8 +12,9 @@ _OCT_DIGITS = "01234567_"
 _BIN_DIGITS = "01_"
 
 _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+_VALID_ASCII_CHARS = "\n\t !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
-_DEL = "\177"
+_REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
 
 # _MAX_ITERATIONS_MULTIPLIER is used to bound iterative loops in lieu of 'while'.
 # Theoretical bound is 2 * N (length of string), as every step either consumes
@@ -101,23 +102,24 @@ def _is_dict(value):
     return type(value) == "dict"
 
 def _validate_text(state, text, context, allow_nl = False):
-    # Fast path for empty or common ASCII strings without control characters.
-    # We skip the more expensive per-character UTF-8 loop if we can.
-    # Note: Starlark strings are already valid UTF-8.
-    if not text:
-        return True
-
     # Check for bare CR if allow_nl is False, or other simple constraints.
     if "\r" in text:
         if not allow_nl:
             _fail(state, "Control char in %s" % context)
             return False
 
-        # If allow_nl is True, we still check for bare CR later in the complex loop.
     elif not allow_nl and "\n" in text:
         _fail(state, "Control char in %s" % context)
         return False
 
+    # FAST PATH: Check if string is pure valid ASCII
+    # We include NL in common set as it's very common and safe to check once up front.
+    if not text.lstrip(_VALID_ASCII_CHARS):
+        return True
+
+    # SLOW PATH: Robust byte-level validation.
+    # We use the old logic because it correctly handles invalid UTF-8 cases
+    # that toml-test expects us to fail on.
     length = len(text)
     idx = 0
     for _ in range(length):
@@ -129,11 +131,10 @@ def _validate_text(state, text, context, allow_nl = False):
         if char <= "\177":
             byte_len = 1
             if char == "\r":
-                # Since we normalize \r\n to \n, any \r here is a bare CR.
                 msg = "Bare CR in %s" % context if allow_nl else "Control char in %s" % context
                 _fail(state, msg)
                 return False
-            elif (char < " " and char != "\t" and not (allow_nl and char == "\n")) or char == _DEL:
+            elif (char < " " and char != "\t" and char != "\n") or char == "\177":
                 _fail(state, "Control char in %s" % context)
                 return False
         elif char >= "\302" and char <= "\337":
@@ -147,6 +148,10 @@ def _validate_text(state, text, context, allow_nl = False):
                     return False
         elif char >= "\360" and char <= "\364":
             byte_len = 4
+        elif char == _REPLACEMENT_CHAR:
+            # If Bazel's loader replaced invalid bytes with U+FFFD, fail.
+            _fail(state, "Invalid UTF-8 in %s" % context)
+            return False
         else:
             _fail(state, "Invalid UTF-8 in %s" % context)
             return False
@@ -157,6 +162,7 @@ def _validate_text(state, text, context, allow_nl = False):
                     _fail(state, "Truncated UTF-8 in %s" % context)
                     return False
         idx += byte_len
+
     return True
 
 def _is_hex(hex_str):
