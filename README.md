@@ -45,4 +45,4 @@ Tested on an **Apple M3 MacBook Pro**:
 
 ### Compliance
 
-The implementation is verified against the [toml-test](https://github.com/toml-lang/toml-test) suite, passing all **901** compliance tests (decoding and encoding).
+The implementation is verified against the [toml-test](https://github.com/toml-lang/toml-test) suite, passing all compliance tests (decoding and encoding).
