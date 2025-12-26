@@ -9,7 +9,7 @@ Public API re-exports
 <pre>
 load("@toml.bzl", "toml")
 
-toml.decode(<a href="#toml.decode-data">data</a>, <a href="#toml.decode-default">default</a>, <a href="#toml.decode-expand_values">expand_values</a>)
+toml.decode(<a href="#toml.decode-data">data</a>, <a href="#toml.decode-default">default</a>, <a href="#toml.decode-expand_values">expand_values</a>, <a href="#toml.decode-return_complex_types_as_string">return_complex_types_as_string</a>)
 </pre>
 
 Decodes a TOML string into a Starlark structure.
@@ -22,6 +22,7 @@ Decodes a TOML string into a Starlark structure.
 | <a id="toml.decode-data"></a>data |  The TOML string to decode.   |  none |
 | <a id="toml.decode-default"></a>default |  Optional value to return if parsing fails. If None, the parser will fail.   |  `None` |
 | <a id="toml.decode-expand_values"></a>expand_values |  If True, returns values in the toml-test JSON-compatible format (e.g., {"type": "integer", "value": "123"}).   |  `False` |
+| <a id="toml.decode-return_complex_types_as_string"></a>return_complex_types_as_string |  If True, returns datetime, date, time, nan, and inf as raw strings instead of structs.   |  `False` |
 
 **RETURNS**
 

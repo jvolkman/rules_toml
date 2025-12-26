@@ -45,7 +45,7 @@ def _errors():
 
     return struct(add = add, get = get)
 
-def _parser(data, default):
+def _parser(data, default, return_complex_types_as_string):
     """Initializes the parser state structure."""
     root_dict = {}
     return struct(
@@ -62,6 +62,7 @@ def _parser(data, default):
         path_types = {(): "table"},
         explicit_paths = {(): True},
         header_paths = {},
+        return_complex_types_as_string = return_complex_types_as_string,
     )
 
 def _fail(state, msg):
@@ -744,23 +745,31 @@ def _parse_scalar(state):
         return False
 
     # Fast-path Inf/NaN
-    # Fast-path Inf/NaN
     char = data[pos]
     if char == "n":
         if data[pos:pos + 3] == "nan":
             state.pos[0] += 3
+            if state.return_complex_types_as_string:
+                return "nan"
             return struct(toml_type = "float", value = "nan")
     elif char == "i":
         if data[pos:pos + 3] == "inf":
             state.pos[0] += 3
+            if state.return_complex_types_as_string:
+                return "inf"
             return struct(toml_type = "float", value = "inf")
     elif char == "+" or char == "-":
         if data[pos + 1:pos + 4] == "nan":
             state.pos[0] += 4
+            if state.return_complex_types_as_string:
+                return "nan"
             return struct(toml_type = "float", value = "nan")
         if data[pos + 1:pos + 4] == "inf":
             state.pos[0] += 4
-            return struct(toml_type = "float", value = "-inf" if char == "-" else "inf")
+            val = "-inf" if char == "-" else "inf"
+            if state.return_complex_types_as_string:
+                return val
+            return struct(toml_type = "float", value = val)
 
     # Manual dispatch for scalars
     char = data[pos]
@@ -850,6 +859,8 @@ def _parse_scalar(state):
                         if state.pos[0] < length:
                             if data[state.pos[0]] in "Zz":
                                 state.pos[0] += 1
+                                if state.return_complex_types_as_string:
+                                    return (value_str + "Z")
                                 return struct(toml_type = "datetime", value = (value_str + "Z").replace(" ", "T").replace("t", "T"))
                             if data[state.pos[0]] in "+-":
                                 offset_str = data[state.pos[0]:state.pos[0] + 6]
@@ -859,10 +870,16 @@ def _parse_scalar(state):
                                     if not _validate_offset(state, offset_hours, offset_minutes):
                                         return None
                                     state.pos[0] += 6
+                                    if state.return_complex_types_as_string:
+                                        return (value_str + offset_str)
                                     return struct(toml_type = "datetime", value = (value_str + offset_str).replace(" ", "T").replace("t", "T"))
+                        if state.return_complex_types_as_string:
+                            return value_str
                         return struct(toml_type = "datetime-local", value = value_str.replace(" ", "T").replace("t", "T"))
                     else:
                         state.pos[0] -= 1
+                if state.return_complex_types_as_string:
+                    return date_str
                 return struct(toml_type = "date-local", value = date_str)
 
         # Time check
@@ -883,6 +900,8 @@ def _parse_scalar(state):
                 state.pos[0] = old_pos + time_len
                 if not _validate_time(state, int(time_str[0:2]), int(time_str[3:5]), int(time_str[6:8])):
                     return None
+                if state.return_complex_types_as_string:
+                    return time_str
                 return struct(toml_type = "time-local", value = time_str)
             state.pos[0] = old_pos
 
@@ -1181,7 +1200,7 @@ def _is_globally_safe(data):
     """
     return not data.lstrip(_VALID_ASCII_CHARS)
 
-def decode(data, default = None, expand_values = False):
+def decode(data, default = None, expand_values = False, return_complex_types_as_string = False):
     """Decodes a TOML string into a Starlark structure.
 
     Args:
@@ -1189,6 +1208,8 @@ def decode(data, default = None, expand_values = False):
       default: Optional value to return if parsing fails. If None, the parser will fail.
       expand_values: If True, returns values in the toml-test JSON-compatible format
         (e.g., {"type": "integer", "value": "123"}).
+      return_complex_types_as_string: If True, returns datetime, date, time, nan,
+        and inf as raw strings instead of structs.
 
     Returns:
       The decoded Starlark structure (dict/list) or the default value on error.
@@ -1197,7 +1218,7 @@ def decode(data, default = None, expand_values = False):
     # TOML allows parsers to normalize newlines. Doing it up front
     # significantly simplifies the rest of the parsing logic.
     data = data.replace("\r\n", "\n")
-    state = _parser(data, default)
+    state = _parser(data, default, return_complex_types_as_string)
     state.is_safe[0] = _is_globally_safe(data)
 
     # Process line by line (roughly)
