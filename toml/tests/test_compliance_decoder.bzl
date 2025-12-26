@@ -87,7 +87,7 @@ def _sanitize_name(name):
             res += "_"
     return res
 
-def create_tests(name = "tests"):
+def test_compliance_decoder_suite(name = "test_compliance_decoder"):
     """Instantiates the TOML compliance test suite.
 
     Args:

@@ -9,3 +9,11 @@ bzl_library(
         "@bazel_lib//lib:strings",
     ],
 )
+
+bzl_library(
+    name = "encode",
+    srcs = ["encode.bzl"],
+    deps = [
+        "@bazel_lib//lib:strings",
+    ],
+)
