@@ -1,6 +1,6 @@
 # toml.bzl
 
-A pure Starlark TOML 1.1.0 parser.
+A pure Starlark TOML 1.1.0 encoder and decoder.
 
 ## Usage
 
