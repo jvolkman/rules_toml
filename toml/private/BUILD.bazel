@@ -7,6 +7,5 @@ bzl_library(
     srcs = ["decode.bzl"],
     deps = [
         "@bazel_lib//lib:strings",
-        "@re.bzl//:re",
     ],
 )

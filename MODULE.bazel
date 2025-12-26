@@ -13,13 +13,6 @@ bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1", dev_dependency = Tr
 bazel_dep(name = "rules_testing", version = "0.9.0", dev_dependency = True)
 bazel_dep(name = "bazelrc-preset.bzl", version = "1.8.0", dev_dependency = True)
 
-bazel_dep(name = "re.bzl", version = "0.1.0")
-git_override(
-    module_name = "re.bzl",
-    commit = "2e02d77d1f614bf7d69a2f813cc99b751e9f60dd",
-    remote = "https://github.com/jvolkman/re.bzl.git",
-)
-
 test_suite = use_repo_rule("//toml/tests:test_suite_repo.bzl", "test_suite")
 
 test_suite(
