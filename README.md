@@ -51,8 +51,3 @@ load("@toml.bzl//toml", "decode", "encode")
 config = decode("key = 'value'")
 content = encode({"a": 1})
 ```
-
-- **Spec Compliant**: Supports 100% of TOML 1.0.0 for both decoding and encoding.
-- **Optimized**: Uses native Starlark string methods and operators to minimize interpreter overhead.
-- **Recursion-Safe**: Uses iterative stack-based approaches to avoid Starlark's recursion limits.
-- **Robust**: Built-in cycle detection and bounded execution.
