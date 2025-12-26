@@ -88,7 +88,7 @@ def _skip_ws(state):
         break
 
 def _expect(state, char):
-    if _has_error(state):
+    if state.error[0]:
         return
     if state.pos[0] >= state.len or state.data[state.pos[0]] != char:
         _fail(state, "Expected '%s' at %d" % (char, state.pos[0]))
@@ -230,29 +230,55 @@ def _escape_char(char):
     return None
 
 def _parse_basic_string(state):
-    _expect(state, '"')
-    if _has_error(state):
+    if state.pos[0] >= state.len or state.data[state.pos[0]] != '"':
+        _fail(state, "Expected '\"' at %d" % state.pos[0])
         return ""
-    chars = []
+    state.pos[0] += 1
+
+    if state.error[0]:
+        return ""
+
     data = state.data
     length = state.len
+    pos = state.pos[0]
+
+    # Optimized search for next quote
+    quote_idx = data.find('"', pos)
+    if quote_idx == -1:
+        _fail(state, "Unterminated string")
+        return ""
+
+    # Bounded search for first escape
+    escape_idx = data.find("\\", pos, quote_idx)
+
+    # FAST PATH: No escapes in the string
+    if escape_idx == -1:
+        chunk = data[pos:quote_idx]
+        if not _validate_text(state, chunk, "string", allow_nl = False):
+            return ""
+        state.pos[0] = quote_idx + 1
+        return chunk
+
+    # SLOW PATH: Has escapes, process in chunks
+    chars = []
     for _ in range(length):
         pos = state.pos[0]
         if pos >= length:
             _fail(state, "Unterminated string")
             return ""
 
-        # Find next delimiter or escape
+        # Find next delimiter or next escape (bounded by delimiter)
+        # We RE-SEARCH quote_idx because pos might have moved after an escape.
         quote_idx = data.find('"', pos)
-        escape_idx = data.find("\\", pos)
-
         if quote_idx == -1:
             _fail(state, "Unterminated string")
             return ""
 
+        escape_idx = data.find("\\", pos, quote_idx)
+
         next_idx = quote_idx
         is_esc = False
-        if escape_idx != -1 and escape_idx < quote_idx:
+        if escape_idx != -1:  # Guaranteed < quote_idx by find bound
             next_idx = escape_idx
             is_esc = True
 
@@ -270,7 +296,7 @@ def _parse_basic_string(state):
         # Handle escape
         state.pos[0] += 1
         if state.pos[0] >= length:
-            _fail(state, "TLS")
+            _fail(state, "Unterminated string")
             return ""
         esc = data[state.pos[0]]
         state.pos[0] += 1
@@ -327,17 +353,17 @@ def _parse_multiline_basic_string(state):
             _fail(state, "Unterminated multiline string")
             return ""
 
-        # Find next " or \
+        # Find next delimiter or next escape (bounded by delimiter)
         q_idx = d.find('"""', p)
-        e_idx = d.find("\\", p)
-
         if q_idx == -1:
             _fail(state, "Unterminated multiline string")
             return ""
 
+        e_idx = d.find("\\", p, q_idx)
+
         next_idx = q_idx
         is_esc = False
-        if e_idx != -1 and e_idx < q_idx:
+        if e_idx != -1:  # Guaranteed < q_idx by find bound
             next_idx = e_idx
             is_esc = True
 
@@ -478,12 +504,15 @@ def _parse_key(state):
     # Hand-parse bare keys: [A-Za-z0-9_-]+
     start = pos
 
-    # Use a loop over a limited window to avoid huge string slices.
-    # Most bare keys are short.
+    # Use windowed lstrip to avoid character loop overhead
     for _ in range(state.len - pos):
-        if pos < state.len and data[pos] in _BARE_KEY_CHARS:
-            pos += 1
-        else:
+        if pos >= state.len:
+            break
+        window = data[pos:pos + 64]
+        stripped = window.lstrip(_BARE_KEY_CHARS)
+        consumed = len(window) - len(stripped)
+        pos += consumed
+        if consumed < len(window):
             break
 
     if pos > start:
