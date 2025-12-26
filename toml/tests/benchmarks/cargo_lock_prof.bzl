@@ -1,3 +1,4 @@
+"""Cargo.lock benchmarking"""
 load("//toml:toml.bzl", "decode")
 load(":cargo_lock_data.bzl", "CARGO_LOCK")
 
