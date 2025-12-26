@@ -18,6 +18,6 @@ http_jar(
 
 git_override(
     module_name = "re.bzl",
-    commit = "1212d2d312dd511252998f822d559c77c6888c3a",
+    commit = "2e02d77d1f614bf7d69a2f813cc99b751e9f60dd",
     remote = "https://github.com/jvolkman/re.bzl.git",
 )

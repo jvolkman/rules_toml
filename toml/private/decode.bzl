@@ -820,36 +820,21 @@ def _parse_complex_iterative(state):
             fr[1] = _MODE_TABLE_VAL
         elif mode == _MODE_TABLE_VAL:
             ks = fr[2]
+
+            # Use the explicit_map from the current stack frame (index 3)
+            # stack[-1] refers to the current inline table context.
+            explicit_map = stack[-1][3]
+
             if c in "[{":
                 nc = [] if c == "[" else {}
                 curr = cont
                 for i in range(len(ks) - 1):
                     k = ks[i]
-                    if k in curr:
-                        etc = state.path_types.get(tuple(stack[-1][3].get(tuple(ks[:i + 1]), [])))  # TODO: this path tracking is getting messy
 
-                        # Simplified inline table path tracking
-                        pass
-                    else:
-                        new_tab = {}
-                        curr[k] = new_tab
-                        curr = new_tab
-                lk = ks[-1]
-                if lk in curr:
-                    _fail(state, "Duplicate key %s" % lk)
-                    break
-                curr[lk] = nc
-
-                state.pos[0] += 1
-                stack.append([nc, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}])
-                fr[1] = _MODE_TABLE_COMMA
-            else:
-                v = _parse_val_nested(state)
-                if _has_error(state):
-                    break
-                curr = cont
-                for i in range(len(ks) - 1):
-                    k = ks[i]
+                    # Check if we are traversing through an explicitly defined key
+                    if tuple(ks[:i + 1]) in explicit_map:
+                        _fail(state, "Key conflict with %s" % k)
+                        break
                     if k in curr:
                         if not _is_dict(curr[k]):
                             _fail(state, "Key conflict with %s" % k)
@@ -865,6 +850,42 @@ def _parse_complex_iterative(state):
                 if lk in curr:
                     _fail(state, "Duplicate key %s" % lk)
                     break
+
+                # Mark this key path as explicitly defined in the current table
+                explicit_map[tuple(ks)] = True
+
+                curr[lk] = nc
+
+                state.pos[0] += 1
+                stack.append([nc, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}])
+                fr[1] = _MODE_TABLE_COMMA
+            else:
+                v = _parse_val_nested(state)
+                if _has_error(state):
+                    break
+                curr = cont
+                for i in range(len(ks) - 1):
+                    k = ks[i]
+                    if tuple(ks[:i + 1]) in explicit_map:
+                        _fail(state, "Key conflict with %s" % k)
+                        break
+                    if k in curr:
+                        if not _is_dict(curr[k]):
+                            _fail(state, "Key conflict with %s" % k)
+                            break
+                        curr = curr[k]
+                    else:
+                        new_tab = {}
+                        curr[k] = new_tab
+                        curr = new_tab
+                if _has_error(state):
+                    break
+                lk = ks[-1]
+                if lk in curr:
+                    _fail(state, "Duplicate key %s" % lk)
+                    break
+
+                explicit_map[tuple(ks)] = True
                 curr[lk] = v
                 fr[1] = _MODE_TABLE_COMMA
         elif mode == _MODE_TABLE_COMMA:
@@ -964,9 +985,9 @@ def decode(data, default = None, expand_values = False):
         if c == "\r":
             if state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
                 state.pos[0] += 2
-            else:
-                state.pos[0] += 1
-            continue
+                continue
+            _fail(state, "Bare CR invalid")
+            break
 
         if c == "[":
             _parse_table(state)
