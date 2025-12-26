@@ -5,8 +5,7 @@ It is optimized for performance in the Starlark interpreter by using native stri
 methods and a chunk-based parsing strategy.
 """
 
-# --- Tokens ---
-# --- Constants for Manual Parsing ---
+# --- Constants for Tokenization ---
 _DIGITS = "0123456789_"
 _HEX_DIGITS = "0123456789abcdefABCDEF_"
 _OCT_DIGITS = "01234567_"
@@ -62,26 +61,26 @@ def _has_error(state):
     return state.error[0] != None
 
 def _skip_ws(state):
-    d = state.data
-    n = state.len
-    for _ in range(n):
-        p = state.pos[0]
-        if p >= n:
+    data = state.data
+    length = state.len
+    for _ in range(length):
+        pos = state.pos[0]
+        if pos >= length:
             break
-        c = d[p]
-        if c == " " or c == "\t":
+        char = data[pos]
+        if char == " " or char == "\t":
             state.pos[0] += 1
             continue
-        if c == "#":
-            nl = d.find("\n", p)
-            end = nl if nl != -1 else n
+        if char == "#":
+            newline_pos = data.find("\n", pos)
+            end = newline_pos if newline_pos != -1 else length
 
             # If CRLF, the CR is part of the line break, not the comment content.
             comment_end = end
-            if comment_end > p + 1 and d[comment_end - 1] == "\r":
+            if comment_end > pos + 1 and data[comment_end - 1] == "\r":
                 comment_end -= 1
 
-            comment = d[p + 1:comment_end]
+            comment = data[pos + 1:comment_end]
             if not _validate_text(state, comment, "comment", allow_nl = False):
                 break
             state.pos[0] = end
@@ -98,22 +97,22 @@ def _expect(state, char):
 
 # --- Types & Validation ---
 
-def _is_dict(v):
-    return type(v) == "dict"
+def _is_dict(value):
+    return type(value) == "dict"
 
-def _validate_text(state, s, context, allow_nl = False):
-    n = len(s)
-    i = 0
-    for _ in range(n):
-        if i >= n:
+def _validate_text(state, text, context, allow_nl = False):
+    length = len(text)
+    idx = 0
+    for _ in range(length):
+        if idx >= length:
             break
-        c = s[i]
+        char = text[idx]
 
-        blen = 0
-        if c <= "\177":
-            blen = 1
-            if c == "\r":
-                if i + 1 < n and s[i + 1] == "\n":
+        byte_len = 0
+        if char <= "\177":
+            byte_len = 1
+            if char == "\r":
+                if idx + 1 < length and text[idx + 1] == "\n":
                     # Allow CRLF if it's a newline context
                     if not allow_nl:
                         _fail(state, "Control char in %s" % context)
@@ -124,36 +123,36 @@ def _validate_text(state, s, context, allow_nl = False):
                 else:
                     _fail(state, "Control char in %s" % context)
                     return False
-            elif (c < " " and c != "\t" and not (allow_nl and c == "\n")) or c == _DEL:
+            elif (char < " " and char != "\t" and not (allow_nl and char == "\n")) or char == _DEL:
                 _fail(state, "Control char in %s" % context)
                 return False
-        elif c >= "\302" and c <= "\337":
-            blen = 2
-        elif c >= "\340" and c <= "\357":
-            blen = 3
-            if c == "\355" and i + 1 < n:
-                nc = s[i + 1]
-                if nc >= "\240" and nc <= "\277":
+        elif char >= "\302" and char <= "\337":
+            byte_len = 2
+        elif char >= "\340" and char <= "\357":
+            byte_len = 3
+            if char == "\355" and idx + 1 < length:
+                next_char = text[idx + 1]
+                if next_char >= "\240" and next_char <= "\277":
                     _fail(state, "Surrogate in %s" % context)
                     return False
-        elif c >= "\360" and c <= "\364":
-            blen = 4
+        elif char >= "\360" and char <= "\364":
+            byte_len = 4
         else:
             _fail(state, "Invalid UTF-8 in %s" % context)
             return False
 
-        if blen > 1:
-            for j in range(1, blen):
-                if i + j >= n or not (s[i + j] >= "\200" and s[i + j] <= "\277"):
+        if byte_len > 1:
+            for j in range(1, byte_len):
+                if idx + j >= length or not (text[idx + j] >= "\200" and text[idx + j] <= "\277"):
                     _fail(state, "Truncated UTF-8 in %s" % context)
                     return False
-        i += blen
+        idx += byte_len
     return True
 
-def _is_hex(s):
-    for i in range(len(s)):
-        ch = s[i]
-        if not ((ch >= "0" and ch <= "9") or (ch >= "a" and ch <= "f") or (ch >= "A" and ch <= "F")):
+def _is_hex(hex_str):
+    for i in range(len(hex_str)):
+        char = hex_str[i]
+        if not ((char >= "0" and char <= "9") or (char >= "a" and char <= "f") or (char >= "A" and char <= "F")):
             return False
     return True
 
@@ -169,54 +168,54 @@ def _codepoint_to_string(code):
     lo = 0xDC00 + (v % 1024)
     return json.decode('"\\u' + _to_hex(hi, 4) + "\\u" + _to_hex(lo, 4) + '"')
 
-def _is_leap(y):
-    return (y % 4 == 0 and y % 100 != 0) or (y % 400 == 0)
+def _is_leap(year):
+    return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
 
-def _get_days_in_month(m, y):
-    if m in [1, 3, 5, 7, 8, 10, 12]:
+def _get_days_in_month(month, year):
+    if month in [1, 3, 5, 7, 8, 10, 12]:
         return 31
-    if m in [4, 6, 9, 11]:
+    if month in [4, 6, 9, 11]:
         return 30
-    if m == 2:
-        return 29 if _is_leap(y) else 28
+    if month == 2:
+        return 29 if _is_leap(year) else 28
     return 0
 
-def _validate_date(state, y, m, d):
-    if y < 0 or y > 9999 or m < 1 or m > 12 or d < 1 or d > _get_days_in_month(m, y):
-        _fail(state, "Invalid date: %d-%d-%d" % (y, m, d))
+def _validate_date(state, year, month, day):
+    if year < 0 or year > 9999 or month < 1 or month > 12 or day < 1 or day > _get_days_in_month(month, year):
+        _fail(state, "Invalid date: %d-%d-%d" % (year, month, day))
         return False
     return True
 
-def _validate_time(state, h, m, s):
-    if h < 0 or h > 23 or m < 0 or m > 59 or (s < 0 or s > 60):
-        _fail(state, "Invalid time: %d:%d:%d" % (h, m, s))
+def _validate_time(state, hour, minute, second):
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59 or (second < 0 or second > 60):
+        _fail(state, "Invalid time: %d:%d:%d" % (hour, minute, second))
         return False
     return True
 
-def _validate_offset(state, h, m):
-    if h < 0 or h > 23 or m < 0 or m > 59:
-        _fail(state, "Invalid offset: %d:%d" % (h, m))
+def _validate_offset(state, hour, minute):
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        _fail(state, "Invalid offset: %d:%d" % (hour, minute))
         return False
     return True
 
 # --- String Parsing ---
 
-def _escape_char(c):
-    if c == "b":
+def _escape_char(char):
+    if char == "b":
         return "\b"
-    if c == "t":
+    if char == "t":
         return "\t"
-    if c == "n":
+    if char == "n":
         return "\n"
-    if c == "f":
+    if char == "f":
         return "\f"
-    if c == "r":
+    if char == "r":
         return "\r"
-    if c == "\\":
+    if char == "\\":
         return "\\"
-    if c == "e":
+    if char == "e":
         return json.decode('"\\u001b"')
-    if c == '"':
+    if char == '"':
         return '"'
     return None
 
@@ -225,30 +224,30 @@ def _parse_basic_string(state):
     if _has_error(state):
         return ""
     chars = []
-    d = state.data
-    n = state.len
-    for _ in range(n):
-        p = state.pos[0]
-        if p >= n:
+    data = state.data
+    length = state.len
+    for _ in range(length):
+        pos = state.pos[0]
+        if pos >= length:
             _fail(state, "Unterminated string")
             return ""
 
         # Find next delimiter or escape
-        q_idx = d.find('"', p)
-        e_idx = d.find("\\", p)
+        quote_idx = data.find('"', pos)
+        escape_idx = data.find("\\", pos)
 
-        if q_idx == -1:
+        if quote_idx == -1:
             _fail(state, "Unterminated string")
             return ""
 
-        next_idx = q_idx
+        next_idx = quote_idx
         is_esc = False
-        if e_idx != -1 and e_idx < q_idx:
-            next_idx = e_idx
+        if escape_idx != -1 and escape_idx < quote_idx:
+            next_idx = escape_idx
             is_esc = True
 
-        if next_idx > p:
-            chunk = d[p:next_idx]
+        if next_idx > pos:
+            chunk = data[pos:next_idx]
             if not _validate_text(state, chunk, "string", allow_nl = False):
                 return ""
             chars.append(chunk)
@@ -260,29 +259,29 @@ def _parse_basic_string(state):
 
         # Handle escape
         state.pos[0] += 1
-        if state.pos[0] >= n:
+        if state.pos[0] >= length:
             _fail(state, "TLS")
             return ""
-        esc = d[state.pos[0]]
+        esc = data[state.pos[0]]
         state.pos[0] += 1
         sm = _escape_char(esc)
         if sm:
             chars.append(sm)
             continue
         if esc == "x":
-            h2 = d[state.pos[0]:state.pos[0] + 2]
-            if len(h2) == 2 and _is_hex(h2):
-                chars.append(_codepoint_to_string(int(h2, 16)))
+            hex_str = data[state.pos[0]:state.pos[0] + 2]
+            if len(hex_str) == 2 and _is_hex(hex_str):
+                chars.append(_codepoint_to_string(int(hex_str, 16)))
                 state.pos[0] += 2
                 continue
         if esc == "u" or esc == "U":
-            sz = 4 if esc == "u" else 8
-            hx = d[state.pos[0]:state.pos[0] + sz]
-            if len(hx) == sz and _is_hex(hx):
-                code = int(hx, 16)
+            size = 4 if esc == "u" else 8
+            hex_str = data[state.pos[0]:state.pos[0] + size]
+            if len(hex_str) == size and _is_hex(hex_str):
+                code = int(hex_str, 16)
                 if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
                     chars.append(_codepoint_to_string(code))
-                    state.pos[0] += sz
+                    state.pos[0] += size
                     continue
         _fail(state, "Invalid escape")
         return ""
@@ -292,13 +291,13 @@ def _parse_literal_string(state):
     _expect(state, "'")
     if _has_error(state):
         return ""
-    p = state.pos[0]
-    d = state.data
-    idx = d.find("'", p)
+    pos = state.pos[0]
+    data = state.data
+    idx = data.find("'", pos)
     if idx == -1:
         _fail(state, "Unterminated literal string")
         return ""
-    content = d[p:idx]
+    content = data[pos:idx]
     if not _validate_text(state, content, "literal string", allow_nl = False):
         return ""
     state.pos[0] = idx + 1
@@ -462,36 +461,36 @@ def _parse_string(state):
     return ""
 
 def _parse_key(state):
-    p = state.pos[0]
-    d = state.data
-    if d[p] == '"':
-        if p + 2 < state.len and d[p + 1:p + 3] == '""':
+    pos = state.pos[0]
+    data = state.data
+    if data[pos] == '"':
+        if pos + 2 < state.len and data[pos + 1:pos + 3] == '""':
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_basic_string(state)
-    if d[p] == "'":
-        if p + 2 < state.len and d[p + 1:p + 3] == "''":
+    if data[pos] == "'":
+        if pos + 2 < state.len and data[pos + 1:pos + 3] == "''":
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_literal_string(state)
-    p = state.pos[0]
-    d = state.data
-    n = state.len
+    pos = state.pos[0]
+    data = state.data
+    length = state.len
 
     # Hand-parse bare keys: [A-Za-z0-9_-]+
-    start = p
-    for _ in range(n - p):
-        if p >= n:
+    start = pos
+    for _ in range(length - pos):
+        if pos >= length:
             break
-        c = d[p]
-        if (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_" or c == "-":
-            p += 1
+        char = data[pos]
+        if (char >= "a" and char <= "z") or (char >= "A" and char <= "Z") or (char >= "0" and char <= "9") or char == "_" or char == "-":
+            pos += 1
             continue
         break
 
-    if p > start:
-        key = d[start:p]
-        state.pos[0] = p
+    if pos > start:
+        key = data[start:pos]
+        state.pos[0] = pos
         return key
 
     _fail(state, "Invalid key format")
@@ -513,219 +512,221 @@ def _parse_dotted_key(state):
     return keys
 
 def _get_or_create_table(state, keys, is_array):
-    curr = state.root
+    current = state.root
     path = []
     for i in range(len(keys) - 1):
-        k = keys[i]
-        path.append(k)
-        tp = tuple(path)
-        if k in curr:
-            v = curr[k]
-            etc = state.path_types.get(tp)
-            if etc != "table" and etc != "aot":
-                _fail(state, "Traversal conflict with %s" % k)
+        key = keys[i]
+        path.append(key)
+        path_tuple = tuple(path)
+        if key in current:
+            existing = current[key]
+            existing_type = state.path_types.get(path_tuple)
+            if existing_type != "table" and existing_type != "aot":
+                _fail(state, "Traversal conflict with %s" % key)
                 return {}
-            curr = v if etc == "table" else (v[-1] if v else None)
-            if curr == None:
+            current = existing if existing_type == "table" else (existing[-1] if existing else None)
+            if current == None:
                 _fail(state, "Empty AOT conflict")
                 return {}
         else:
             new_tab = {}
-            curr[k] = new_tab
-            curr = new_tab
-            state.path_types[tp] = "table"
-    lk = keys[-1]
-    path.append(lk)
-    tp = tuple(path)
+            current[key] = new_tab
+            current = new_tab
+            state.path_types[path_tuple] = "table"
+    last_key = keys[-1]
+    path.append(last_key)
+    path_tuple = tuple(path)
     if is_array:
-        et = state.path_types.get(tp)
-        if et and et != "aot":
-            _fail(state, "AOT conflict on %s" % lk)
+        existing_type = state.path_types.get(path_tuple)
+        if existing_type and existing_type != "aot":
+            _fail(state, "AOT conflict on %s" % last_key)
             return {}
-        if lk in curr:
-            curr[lk].append({})
-            state.explicit_paths[tp] = True
-            state.header_paths[tp] = True
-            return curr[lk][-1]
+        if last_key in current:
+            current[last_key].append({})
+            state.explicit_paths[path_tuple] = True
+            state.header_paths[path_tuple] = True
+            return current[last_key][-1]
         else:
-            curr[lk] = [{}]
-            state.path_types[tp] = "aot"
-            state.explicit_paths[tp] = True
-            state.header_paths[tp] = True
-            return curr[lk][0]
-    elif lk in curr:
-        if state.explicit_paths.get(tp):
-            _fail(state, "Redefinition of %s" % lk)
+            current[last_key] = [{}]
+            state.path_types[path_tuple] = "aot"
+            state.explicit_paths[path_tuple] = True
+            state.header_paths[path_tuple] = True
+            return current[last_key][0]
+    elif last_key in current:
+        if state.explicit_paths.get(path_tuple):
+            _fail(state, "Redefinition of %s" % last_key)
             return {}
-        et = state.path_types.get(tp)
-        if et != "table":
-            _fail(state, "Table conflict on %s" % lk)
+        existing_type = state.path_types.get(path_tuple)
+        if existing_type != "table":
+            _fail(state, "Table conflict on %s" % last_key)
             return {}
-        state.explicit_paths[tp] = True
-        state.header_paths[tp] = True
-        return curr[lk]
+        state.explicit_paths[path_tuple] = True
+        state.header_paths[path_tuple] = True
+        return current[last_key]
     else:
         new_tab = {}
-        curr[lk] = new_tab
-        state.path_types[tp] = "table"
-        state.explicit_paths[tp] = True
-        state.header_paths[tp] = True
+        current[last_key] = new_tab
+        state.path_types[path_tuple] = "table"
+        state.explicit_paths[path_tuple] = True
+        state.header_paths[path_tuple] = True
         return new_tab
 
 def _parse_table(state):
     _expect(state, "[")
-    is_a = False
+    is_array_of_tables = False
     if state.pos[0] < state.len and state.data[state.pos[0]] == "[":
-        is_a = True
+        is_array_of_tables = True
         state.pos[0] += 1
-    ks = _parse_dotted_key(state)
+    keys = _parse_dotted_key(state)
     _expect(state, "]")
-    if is_a:
+    if is_array_of_tables:
         _expect(state, "]")
     if _has_error(state):
         return
-    state.current_path[0] = ks
-    state.current_table[0] = _get_or_create_table(state, ks, is_a)
+    state.current_path[0] = keys
+    state.current_table[0] = _get_or_create_table(state, keys, is_array_of_tables)
 
 def _parse_key_value(state, target):
-    ks = _parse_dotted_key(state)
-    if _has_error(state) or not ks:
+    keys = _parse_dotted_key(state)
+    if _has_error(state) or not keys:
         return
     _skip_ws(state)
     _expect(state, "=")
     _skip_ws(state)
-    val = _parse_value(state)
+    value = _parse_value(state)
     if _has_error(state):
         return
-    curr = target
-    base = state.current_path[0]
-    for i in range(len(ks) - 1):
-        k = ks[i]
-        tp = tuple(base + ks[:i + 1])
-        if k in curr:
-            etc = state.path_types.get(tp)
-            if etc != "table":
-                _fail(state, "KV traversal conflict with %s" % k)
+    current = target
+    base_path = state.current_path[0]
+    for i in range(len(keys) - 1):
+        key = keys[i]
+        path_tuple = tuple(base_path + keys[:i + 1])
+        if key in current:
+            existing_type = state.path_types.get(path_tuple)
+            if existing_type != "table":
+                _fail(state, "KV traversal conflict with %s" % key)
                 return
-            if state.header_paths.get(tp):
-                _fail(state, "Cannot traverse header-defined table via dotted key %s" % k)
+            if state.header_paths.get(path_tuple):
+                _fail(state, "Cannot traverse header-defined table via dotted key %s" % key)
                 return
-            if etc == "table":
-                state.explicit_paths[tp] = True
-            curr = curr[k]
+            if existing_type == "table":
+                state.explicit_paths[path_tuple] = True
+            current = current[key]
         else:
             new_tab = {}
-            curr[k] = new_tab
-            curr = new_tab
-            state.path_types[tp] = "table"
-            state.explicit_paths[tp] = True
-    lk = ks[-1]
-    ltp = tuple(base + ks)
-    if lk in curr:
-        _fail(state, "Duplicate key %s" % lk)
+            current[key] = new_tab
+            current = new_tab
+            state.path_types[path_tuple] = "table"
+            state.explicit_paths[path_tuple] = True
+    last_key = keys[-1]
+    last_path_tuple = tuple(base_path + keys)
+    if last_key in current:
+        _fail(state, "Duplicate key %s" % last_key)
         return
-    curr[lk] = val
-    state.path_types[ltp] = "inline" if type(val) == "dict" else ("array" if type(val) == "list" else "scalar")
+    current[last_key] = value
+    state.path_types[last_path_tuple] = "inline" if type(value) == "dict" else ("array" if type(value) == "list" else "scalar")
 
 def _parse_time_manual(state):
-    p = state.pos[0]
-    d = state.data
-    n = state.len
-    if p + 5 > n or not (d[p].isdigit() and d[p + 1].isdigit() and d[p + 2] == ":" and d[p + 3].isdigit() and d[p + 4].isdigit()):
+    pos = state.pos[0]
+    data = state.data
+    length = state.len
+    if pos + 5 > length or not (data[pos].isdigit() and data[pos + 1].isdigit() and data[pos + 2] == ":" and data[pos + 3].isdigit() and data[pos + 4].isdigit()):
         return None
-    v = d[p:p + 5]
-    p += 5
-    if p + 3 <= n and d[p] == ":" and d[p + 1].isdigit() and d[p + 2].isdigit():
-        v += d[p:p + 3]
-        p += 3
-        if p < n and d[p] == ".":
-            dp = p
-            p += 1
+    timestr = data[pos:pos + 5]
+    pos += 5
+    if pos + 3 <= length and data[pos] == ":" and data[pos + 1].isdigit() and data[pos + 2].isdigit():
+        timestr += data[pos:pos + 3]
+        pos += 3
+        if pos < length and data[pos] == ".":
+            dp = pos
+            pos += 1
             has_f = False
-            for _ in range(n - p):
-                if p < n and d[p].isdigit():
-                    p += 1
+            for _ in range(length - pos):
+                if pos < length and data[pos].isdigit():
+                    pos += 1
                     has_f = True
                 else:
                     break
             if not has_f:
                 _fail(state, "Fractional part must have digits")
                 return None
-            v += d[dp:p]
+            timestr += data[dp:pos]
     else:
-        v += ":00"
-    return v, p - state.pos[0]
+        timestr += ":00"
+    return timestr, pos - state.pos[0]
 
 def _parse_scalar(state):
-    p = state.pos[0]
-    d = state.data
-    n = state.len
+    pos = state.pos[0]
+    data = state.data
+    length = state.len
 
     # Fast-path Booleans
-    if d[p:p + 4] == "true":
+    if data[pos:pos + 4] == "true":
         state.pos[0] += 4
         return True
-    if d[p:p + 5] == "false":
+    if data[pos:pos + 5] == "false":
         state.pos[0] += 5
         return False
 
     # Fast-path Inf/NaN
-    c = d[p]
-    if c == "n":
-        if d[p:p + 3] == "nan":
+    # Fast-path Inf/NaN
+    char = data[pos]
+    if char == "n":
+        if data[pos:pos + 3] == "nan":
             state.pos[0] += 3
             return struct(toml_type = "float", value = "nan")
-    elif c == "i":
-        if d[p:p + 3] == "inf":
+    elif char == "i":
+        if data[pos:pos + 3] == "inf":
             state.pos[0] += 3
             return struct(toml_type = "float", value = "inf")
-    elif c == "+" or c == "-":
-        if d[p + 1:p + 4] == "nan":
+    elif char == "+" or char == "-":
+        if data[pos + 1:pos + 4] == "nan":
             state.pos[0] += 4
             return struct(toml_type = "float", value = "nan")
-        if d[p + 1:p + 4] == "inf":
+        if data[pos + 1:pos + 4] == "inf":
             state.pos[0] += 4
-            return struct(toml_type = "float", value = "-inf" if c == "-" else "inf")
+            return struct(toml_type = "float", value = "-inf" if char == "-" else "inf")
 
     # Manual dispatch for scalars
-    c = d[p]
+    char = data[pos]
 
     # Hex/Oct/Bin
-    if c == "0" and p + 1 < n:
-        n2 = d[p + 1]
-        if n2 == "x":
+    # Hex/Oct/Bin
+    if char == "0" and pos + 1 < length:
+        next_char = data[pos + 1]
+        if next_char == "x":
             # Hex
             # consume until non-hex
             # valid hex: 0-9 a-f A-F _
             # rough scan
             # Optimization: slice a window to avoid huge copy
-            window = d[p:min(n, p + 64)]
+            window = data[pos:min(length, pos + 64)]
 
             tail = window[2:].lstrip(_HEX_DIGITS)
             match_len = len(window) - len(tail)
-            val = d[p:p + match_len]
+            val = data[pos:pos + match_len]
             if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
                 return None
             if len(val) > 2 and val[2] == "_":
                 return None
             state.pos[0] += match_len
             return int(val.replace("_", ""), 16)
-        elif n2 == "o":
-            window = d[p:min(n, p + 64)]
+        elif next_char == "o":
+            window = data[pos:min(length, pos + 64)]
             tail = window[2:].lstrip(_OCT_DIGITS)
             match_len = len(window) - len(tail)
-            val = d[p:p + match_len]
+            val = data[pos:pos + match_len]
             if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
                 return None
             if len(val) > 2 and val[2] == "_":
                 return None
             state.pos[0] += match_len
             return int(val.replace("_", ""), 8)
-        elif n2 == "b":
-            window = d[p:min(n, p + 64)]
+        elif next_char == "b":
+            window = data[pos:min(length, pos + 64)]
             tail = window[2:].lstrip(_BIN_DIGITS)
             match_len = len(window) - len(tail)
-            val = d[p:p + match_len]
+            val = data[pos:pos + match_len]
             if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
                 return None
             if len(val) > 2 and val[2] == "_":
@@ -736,61 +737,61 @@ def _parse_scalar(state):
     # Date vs Number
     # Dates start with digit.
     # Numbers start with digit or +/-.
-    if c.isdigit() or c == "+" or c == "-":
+    if char.isdigit() or char == "+" or char == "-":
         # Check for date: YYYY-MM-DD
         # Minimal check: \d{4}-
 
         # We peek 5 chars for date/time signature
-        sig = d[p:min(n, p + 5)]
+        signature = data[pos:min(length, pos + 5)]
         is_date = False
-        if len(sig) == 5 and sig[4] == "-" and sig[0].isdigit() and sig[1].isdigit() and sig[2].isdigit() and sig[3].isdigit():
+        if len(signature) == 5 and signature[4] == "-" and signature[0].isdigit() and signature[1].isdigit() and signature[2].isdigit() and signature[3].isdigit():
             is_date = True
 
         if is_date:
             # Extract date string YYYY-MM-DD
-            ds = d[p:p + 10]
-            if len(ds) == 10 and ds[4] == "-" and ds[7] == "-" and ds[:4].isdigit() and ds[5:7].isdigit() and ds[8:].isdigit():
-                if not _validate_date(state, int(ds[0:4]), int(ds[5:7]), int(ds[8:10])):
+            date_str = data[pos:pos + 10]
+            if len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-" and date_str[:4].isdigit() and date_str[5:7].isdigit() and date_str[8:].isdigit():
+                if not _validate_date(state, int(date_str[0:4]), int(date_str[5:7]), int(date_str[8:10])):
                     return None
                 state.pos[0] += 10
 
                 # Check for Time and Offset
-                if state.pos[0] < n and d[state.pos[0]] in "Tt ":
-                    sep = d[state.pos[0]]
+                if state.pos[0] < length and data[state.pos[0]] in "Tt ":
+                    separator = data[state.pos[0]]
                     state.pos[0] += 1
-                    tr = _parse_time_manual(state)
-                    if tr:
-                        ts, tl = tr
-                        state.pos[0] += tl
+                    time_result = _parse_time_manual(state)
+                    if time_result:
+                        time_str, time_len = time_result
+                        state.pos[0] += time_len
 
                         # Offset ...
                         # Reuse the logic from the old function?
                         # The old function had heavy nesting.
                         # Simplified:
-                        if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
+                        if not _validate_time(state, int(time_str[0:2]), int(time_str[3:5]), int(time_str[6:8])):
                             return None
 
-                        vs = ds + sep + ts
-                        if state.pos[0] < n:
-                            if d[state.pos[0]] in "Zz":
+                        value_str = date_str + separator + time_str
+                        if state.pos[0] < length:
+                            if data[state.pos[0]] in "Zz":
                                 state.pos[0] += 1
-                                return struct(toml_type = "datetime", value = (vs + "Z").replace(" ", "T").replace("t", "T"))
-                            if d[state.pos[0]] in "+-":
-                                ch = d[state.pos[0]:state.pos[0] + 6]
-                                if (len(ch) == 6 and ch[0] in "+-" and ch[1].isdigit() and ch[2].isdigit() and ch[3] == ":" and ch[4].isdigit() and ch[5].isdigit()):
-                                    oh = int(ch[1:3])
-                                    om = int(ch[4:6])
-                                    if not _validate_offset(state, oh, om):
+                                return struct(toml_type = "datetime", value = (value_str + "Z").replace(" ", "T").replace("t", "T"))
+                            if data[state.pos[0]] in "+-":
+                                offset_str = data[state.pos[0]:state.pos[0] + 6]
+                                if (len(offset_str) == 6 and offset_str[0] in "+-" and offset_str[1].isdigit() and offset_str[2].isdigit() and offset_str[3] == ":" and offset_str[4].isdigit() and offset_str[5].isdigit()):
+                                    offset_hours = int(offset_str[1:3])
+                                    offset_minutes = int(offset_str[4:6])
+                                    if not _validate_offset(state, offset_hours, offset_minutes):
                                         return None
                                     state.pos[0] += 6
-                                    return struct(toml_type = "datetime", value = (vs + ch).replace(" ", "T").replace("t", "T"))
-                        return struct(toml_type = "datetime-local", value = vs.replace(" ", "T").replace("t", "T"))
+                                    return struct(toml_type = "datetime", value = (value_str + offset_str).replace(" ", "T").replace("t", "T"))
+                        return struct(toml_type = "datetime-local", value = value_str.replace(" ", "T").replace("t", "T"))
                     else:
                         state.pos[0] -= 1
-                return struct(toml_type = "date-local", value = ds)
+                return struct(toml_type = "date-local", value = date_str)
 
         # Time check
-        if len(sig) >= 3 and sig[2] == ":":
+        if len(signature) >= 3 and signature[2] == ":":
             # Likely time "HH:MM"
             # 01234567
             # HH:MM:SS
@@ -801,13 +802,13 @@ def _parse_scalar(state):
             # We should reset if it fails?
 
             old_pos = state.pos[0]
-            tr = _parse_time_manual(state)
-            if tr:
-                ts, tl = tr
-                state.pos[0] = old_pos + tl
-                if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
+            time_result = _parse_time_manual(state)
+            if time_result:
+                time_str, time_len = time_result
+                state.pos[0] = old_pos + time_len
+                if not _validate_time(state, int(time_str[0:2]), int(time_str[3:5]), int(time_str[6:8])):
                     return None
-                return struct(toml_type = "time-local", value = ts)
+                return struct(toml_type = "time-local", value = time_str)
             state.pos[0] = old_pos
 
         # Number (Int or Float)
@@ -815,14 +816,14 @@ def _parse_scalar(state):
 
         # 1. Integer part
         num_len = 0
-        if d[p] in "+-":
+        if data[pos] in "+-":
             num_len += 1
 
         # Consume integer digits
         # We use lstrip on a window from current pos
-        w_start = p + num_len
-        if w_start < n:
-            window = d[w_start:min(n, w_start + 64)]
+        w_start = pos + num_len
+        if w_start < length:
+            window = data[w_start:min(length, w_start + 64)]
             tail = window.lstrip(_DIGITS)
 
             # Digits consumed
@@ -831,41 +832,41 @@ def _parse_scalar(state):
 
         # Check for fractional part
         is_float = False
-        if p + num_len < n and d[p + num_len] == ".":
+        if pos + num_len < length and data[pos + num_len] == ".":
             # We must strict check: TOML requires digits after dot
-            if p + num_len + 1 < n and d[p + num_len + 1].isdigit():
+            if pos + num_len + 1 < length and data[pos + num_len + 1].isdigit():
                 is_float = True
                 num_len += 1  # Consume '.'
 
-                w_start = p + num_len
-                window = d[w_start:min(n, w_start + 64)]
+                w_start = pos + num_len
+                window = data[w_start:min(length, w_start + 64)]
                 tail = window.lstrip(_DIGITS)
                 frac_len = len(window) - len(tail)
                 num_len += frac_len
 
         # Check for exponent
         # Check for exponent
-        if p + num_len < n and d[p + num_len] in "eE":
+        if pos + num_len < length and data[pos + num_len] in "eE":
             # We must check for optional sign then digits
             exp_len = 1
-            idx = p + num_len + 1
-            if idx < n and d[idx] in "+-":
+            idx = pos + num_len + 1
+            if idx < length and data[idx] in "+-":
                 exp_len += 1
                 idx += 1
 
             # Check for digits
-            if idx < n and d[idx].isdigit():
+            if idx < length and data[idx].isdigit():
                 is_float = True
                 num_len += exp_len
 
                 w_start = idx
-                window = d[w_start:min(n, w_start + 64)]
+                window = data[w_start:min(length, w_start + 64)]
                 tail = window.lstrip(_DIGITS)
                 exp_digits_len = len(window) - len(tail)
                 num_len += exp_digits_len
 
         # Now we have the strictly scanned number string.
-        val = d[p:p + num_len]
+        val = data[pos:pos + num_len]
 
         # Sanity check: if we just matched a sign "+", that's not a number.
         if num_len == 0 or (num_len == 1 and val in "+-"):
@@ -912,9 +913,9 @@ _MODE_TABLE_VAL = 4
 _MODE_TABLE_COMMA = 5
 
 def _parse_complex_iterative(state):
-    c = state.data[state.pos[0]]
-    res = [] if c == "[" else {}
-    stack = [[res, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}]]
+    char = state.data[state.pos[0]]
+    res = [] if char == "[" else {}
+    stack = [[res, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
     state.pos[0] += 1
     for _ in range(state.len * _MAX_ITERATIONS_MULTIPLIER):
         if not stack or _has_error(state):
@@ -926,36 +927,36 @@ def _parse_complex_iterative(state):
         if state.pos[0] >= state.len:
             _fail(state, "EOF in complex")
             break
-        c = state.data[state.pos[0]]
+        char = state.data[state.pos[0]]
         if mode == _MODE_ARRAY_VAL:
-            if c == "]":
+            if char == "]":
                 state.pos[0] += 1
                 stack.pop()
                 continue
-            if c in "[{":
-                nc = [] if c == "[" else {}
-                cont.append(nc)
+            if char in "[{":
+                new_container = [] if char == "[" else {}
+                cont.append(new_container)
                 state.pos[0] += 1
-                stack.append([nc, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}])
+                stack.append([new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}])
                 fr[1] = _MODE_ARRAY_COMMA
                 continue
-            v = _parse_val_nested(state)
-            if v != None:
-                cont.append(v)
+            val = _parse_val_nested(state)
+            if val != None:
+                cont.append(val)
                 fr[1] = _MODE_ARRAY_COMMA
                 continue
             _fail(state, "Value expected in array")
         elif mode == _MODE_ARRAY_COMMA:
-            if c == "]":
+            if char == "]":
                 fr[1] = _MODE_ARRAY_VAL
                 continue
-            if c == ",":
+            if char == ",":
                 state.pos[0] += 1
                 fr[1] = _MODE_ARRAY_VAL
                 continue
             _fail(state, "Array comma expected")
         elif mode == _MODE_TABLE_KEY:
-            if c == "}":
+            if char == "}":
                 state.pos[0] += 1
                 stack.pop()
                 continue
@@ -972,8 +973,8 @@ def _parse_complex_iterative(state):
             # stack[-1] refers to the current inline table context.
             explicit_map = stack[-1][3]
 
-            if c in "[{":
-                nc = [] if c == "[" else {}
+            if char in "[{":
+                new_container = [] if char == "[" else {}
                 curr = cont
                 for i in range(len(ks) - 1):
                     k = ks[i]
@@ -1001,13 +1002,13 @@ def _parse_complex_iterative(state):
                 # Mark this key path as explicitly defined in the current table
                 explicit_map[tuple(ks)] = True
 
-                curr[lk] = nc
+                curr[lk] = new_container
 
                 state.pos[0] += 1
-                stack.append([nc, _MODE_ARRAY_VAL if c == "[" else _MODE_TABLE_KEY, None, {}])
+                stack.append([new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}])
                 fr[1] = _MODE_TABLE_COMMA
             else:
-                v = _parse_val_nested(state)
+                val = _parse_val_nested(state)
                 if _has_error(state):
                     break
                 curr = cont
@@ -1033,13 +1034,13 @@ def _parse_complex_iterative(state):
                     break
 
                 explicit_map[tuple(ks)] = True
-                curr[lk] = v
+                curr[lk] = val
                 fr[1] = _MODE_TABLE_COMMA
         elif mode == _MODE_TABLE_COMMA:
-            if c == "}":
+            if char == "}":
                 fr[1] = _MODE_TABLE_KEY
                 continue
-            if c == ",":
+            if char == ",":
                 state.pos[0] += 1
                 fr[1] = _MODE_TABLE_KEY
                 continue
@@ -1047,9 +1048,9 @@ def _parse_complex_iterative(state):
     return res
 
 def _parse_val_nested(state):
-    p = state.pos[0]
-    d = state.data
-    if d[p] == '"' or d[p] == "'":
+    pos = state.pos[0]
+    data = state.data
+    if data[pos] == '"' or data[pos] == "'":
         return _parse_string(state)
     return _parse_scalar(state)
 
@@ -1073,28 +1074,28 @@ def _expand_to_toml_test(raw, size_hint):
     for _ in range(size_hint * 2 + 100):
         if not stack:
             break
-        r, t = stack.pop()
-        if type(r) == "dict":
-            for k, v in r.items():
-                if type(v) in ["dict", "list"]:
-                    t[k] = {} if type(v) == "dict" else []
-                    stack.append([v, t[k]])
+        raw_node, target_node = stack.pop()
+        if type(raw_node) == "dict":
+            for key, value in raw_node.items():
+                if type(value) in ["dict", "list"]:
+                    target_node[key] = {} if type(value) == "dict" else []
+                    stack.append([value, target_node[key]])
                 else:
-                    t[k] = _format_scalar_for_test(v)
+                    target_node[key] = _format_scalar_for_test(value)
         else:
-            for v in r:
-                if type(v) in ["dict", "list"]:
-                    t.append({} if type(v) == "dict" else [])
-                    stack.append([v, t[-1]])
+            for value in raw_node:
+                if type(value) in ["dict", "list"]:
+                    target_node.append({} if type(value) == "dict" else [])
+                    stack.append([value, target_node[-1]])
                 else:
-                    t.append(_format_scalar_for_test(v))
+                    target_node.append(_format_scalar_for_test(value))
     return root
 
 def _parse_value(state):
-    c = state.data[state.pos[0]]
-    if c in "[{":
+    char = state.data[state.pos[0]]
+    if char in "[{":
         return _parse_complex_iterative(state)
-    if c in "\"'":
+    if char in "\"'":
         return _parse_string(state)
     res = _parse_scalar(state)
     if res == None and not _has_error(state):
@@ -1124,19 +1125,19 @@ def decode(data, default = None, expand_values = False):
         if state.pos[0] >= state.len:
             break
 
-        c = state.data[state.pos[0]]
+        char = state.data[state.pos[0]]
 
-        if c == "\n":
+        if char == "\n":
             state.pos[0] += 1
             continue
-        if c == "\r":
+        if char == "\r":
             if state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
                 state.pos[0] += 2
                 continue
             _fail(state, "Bare CR invalid")
             break
 
-        if c == "[":
+        if char == "[":
             _parse_table(state)
             if _has_error(state):
                 break
@@ -1148,12 +1149,12 @@ def decode(data, default = None, expand_values = False):
         # Expect newline or EOF after a statement
         _skip_ws(state)
         if state.pos[0] < state.len:
-            c = state.data[state.pos[0]]
-            if c == "\n":
+            char = state.data[state.pos[0]]
+            if char == "\n":
                 state.pos[0] += 1
-            elif c == "\r" and state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
+            elif char == "\r" and state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
                 state.pos[0] += 2
-            elif c == "#":
+            elif char == "#":
                 _skip_ws(state)  # handles comment until newline
             else:
                 _fail(state, "Expected newline or EOF")
@@ -1165,21 +1166,21 @@ def decode(data, default = None, expand_values = False):
     return _expand_to_toml_test(state.root, len(data)) if expand_values else state.root
 
 def _skip_ws_nl(state):
-    d = state.data
-    n = state.len
-    for _ in range(n):
-        p = state.pos[0]
-        if p >= n:
+    data = state.data
+    length = state.len
+    for _ in range(length):
+        pos = state.pos[0]
+        if pos >= length:
             break
-        c = d[p]
-        if c in " \t\n\r":
+        char = data[pos]
+        if char in " \t\n\r":
             state.pos[0] += 1
             continue
-        if c == "#":
-            nl = d.find("\n", p)
-            if nl == -1:
-                state.pos[0] = n
+        if char == "#":
+            newline_pos = data.find("\n", pos)
+            if newline_pos == -1:
+                state.pos[0] = length
                 break
-            state.pos[0] = nl
+            state.pos[0] = newline_pos
             continue
         break
