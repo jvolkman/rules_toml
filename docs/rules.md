@@ -28,3 +28,27 @@ Decodes a TOML string into a Starlark structure.
 The decoded Starlark structure (dict/list) or the default value on error.
 
 
+<a id="toml.encode"></a>
+
+## toml.encode
+
+<pre>
+load("@toml.bzl", "toml")
+
+toml.encode(<a href="#toml.encode-data">data</a>)
+</pre>
+
+Encodes a Starlark dictionary into a TOML string.
+
+**PARAMETERS**
+
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="toml.encode-data"></a>data |  The dictionary to encode. Must be a top-level dictionary.   |  none |
+
+**RETURNS**
+
+A string containing the TOML representation of the data.
+
+
