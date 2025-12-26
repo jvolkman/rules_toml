@@ -185,11 +185,7 @@ def _validate_text(state, text, context, allow_nl = False):
 
 def _is_hex(hex_str):
     """Returns True if the string is a valid hexadecimal sequence."""
-    for i in range(len(hex_str)):
-        char = hex_str[i]
-        if not ((char >= "0" and char <= "9") or (char >= "a" and char <= "f") or (char >= "A" and char <= "F")):
-            return False
-    return True
+    return not hex_str.lstrip("0123456789abcdefABCDEF")
 
 def _to_hex(val, width):
     """Formats an integer as a zero-padded hexadecimal string."""
