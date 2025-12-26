@@ -7,7 +7,13 @@ A pure Starlark TOML 1.1.0 encoder and decoder.
 ### In a `MODULE.bazel`
 
 ```starlark
-bazel_dep(name = "toml.bzl", version = "0.1.0")
+bazel_dep(name = "toml.bzl", version = "0.0.1")
+
+git_override(
+    module_name = "toml.bzl",
+    remote = "https://github.com/jvolkman/toml.bzl.git",
+    tag = "0.0.1",
+)
 ```
 
 ### In a `.bzl` file

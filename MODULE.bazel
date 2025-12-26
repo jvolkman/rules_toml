@@ -2,7 +2,7 @@
 
 module(
     name = "toml.bzl",
-    version = "0.0.0",
+    version = "0.0.1",
     compatibility_level = 1,
 )
 
