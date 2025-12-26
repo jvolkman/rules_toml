@@ -11,6 +11,8 @@ _HEX_DIGITS = "0123456789abcdefABCDEF_"
 _OCT_DIGITS = "01234567_"
 _BIN_DIGITS = "01_"
 
+_BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+
 _DEL = "\177"
 
 # _MAX_ITERATIONS_MULTIPLIER is used to bound iterative loops in lieu of 'while'.
@@ -63,24 +65,22 @@ def _has_error(state):
 def _skip_ws(state):
     data = state.data
     length = state.len
+
     for _ in range(length):
         pos = state.pos[0]
         if pos >= length:
             break
+
         char = data[pos]
         if char == " " or char == "\t":
             state.pos[0] += 1
             continue
+
         if char == "#":
             newline_pos = data.find("\n", pos)
             end = newline_pos if newline_pos != -1 else length
 
-            # If CRLF, the CR is part of the line break, not the comment content.
-            comment_end = end
-            if comment_end > pos + 1 and data[comment_end - 1] == "\r":
-                comment_end -= 1
-
-            comment = data[pos + 1:comment_end]
+            comment = data[pos + 1:end]
             if not _validate_text(state, comment, "comment", allow_nl = False):
                 break
             state.pos[0] = end
@@ -101,6 +101,23 @@ def _is_dict(value):
     return type(value) == "dict"
 
 def _validate_text(state, text, context, allow_nl = False):
+    # Fast path for empty or common ASCII strings without control characters.
+    # We skip the more expensive per-character UTF-8 loop if we can.
+    # Note: Starlark strings are already valid UTF-8.
+    if not text:
+        return True
+
+    # Check for bare CR if allow_nl is False, or other simple constraints.
+    if "\r" in text:
+        if not allow_nl:
+            _fail(state, "Control char in %s" % context)
+            return False
+
+        # If allow_nl is True, we still check for bare CR later in the complex loop.
+    elif not allow_nl and "\n" in text:
+        _fail(state, "Control char in %s" % context)
+        return False
+
     length = len(text)
     idx = 0
     for _ in range(length):
@@ -112,17 +129,10 @@ def _validate_text(state, text, context, allow_nl = False):
         if char <= "\177":
             byte_len = 1
             if char == "\r":
-                if idx + 1 < length and text[idx + 1] == "\n":
-                    # Allow CRLF if it's a newline context
-                    if not allow_nl:
-                        _fail(state, "Control char in %s" % context)
-                        return False
-                elif allow_nl:  # Bare CR in multiline is bad
-                    _fail(state, "Bare CR in %s" % context)
-                    return False
-                else:
-                    _fail(state, "Control char in %s" % context)
-                    return False
+                # Since we normalize \r\n to \n, any \r here is a bare CR.
+                msg = "Bare CR in %s" % context if allow_nl else "Control char in %s" % context
+                _fail(state, msg)
+                return False
             elif (char < " " and char != "\t" and not (allow_nl and char == "\n")) or char == _DEL:
                 _fail(state, "Control char in %s" % context)
                 return False
@@ -307,8 +317,6 @@ def _parse_multiline_basic_string(state):
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
-    elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
-        state.pos[0] += 2
 
     chars = []
     d = state.data
@@ -338,8 +346,6 @@ def _parse_multiline_basic_string(state):
             if not _validate_text(state, chunk, "multiline basic", allow_nl = True):
                 return ""
 
-            # Normalize CRLF to LF, and check for bare CR (handled by _validate_text)
-            chunk = chunk.replace("\r\n", "\n")
             chars.append(chunk)
 
         state.pos[0] = next_idx
@@ -362,7 +368,7 @@ def _parse_multiline_basic_string(state):
         if state.pos[0] >= n:
             break
         esc = d[state.pos[0]]
-        if esc in " \t\r\n":
+        if esc in " \t\n":
             # line-ending backslash
             tp = state.pos[0]
             hl = False
@@ -371,28 +377,27 @@ def _parse_multiline_basic_string(state):
             for _ in range(n - tp):
                 if tp >= n:
                     break
-                if tp + 1 < n and d[tp] == "\r" and d[tp + 1] == "\n":
-                    hl = True
-                    tp += 2
+                window = d[tp:tp + 64]
+                stripped = window.lstrip(" \t")
+                consumed = len(window) - len(stripped)
+                tp += consumed
+                if consumed < len(window):
                     break
-                if d[tp] == "\n":
-                    hl = True
-                    tp += 1
-                    break
-                if d[tp] in " \t\r":
-                    tp += 1
-                else:
-                    break
+
+            if tp < n and d[tp] == "\n":
+                hl = True
+                tp += 1
+
             if hl:
                 # Skip all subsequent whitespace/newlines
                 for _ in range(n - tp):
                     if tp >= n:
                         break
-                    if tp + 1 < n and d[tp] == "\r" and d[tp + 1] == "\n":
-                        tp += 2
-                    elif d[tp] in " \t\n":
-                        tp += 1
-                    else:
+                    window = d[tp:tp + 64]
+                    stripped = window.lstrip(" \t\n")
+                    consumed = len(window) - len(stripped)
+                    tp += consumed
+                    if consumed < len(window):
                         break
                 state.pos[0] = tp
                 continue
@@ -419,8 +424,6 @@ def _parse_multiline_literal_string(state):
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
-    elif state.pos[0] + 1 < state.len and state.data[state.pos[0]] == "\r" and state.data[state.pos[0] + 1] == "\n":
-        state.pos[0] += 2
 
     p = state.pos[0]
     d = state.data
@@ -440,10 +443,8 @@ def _parse_multiline_literal_string(state):
     if not _validate_text(state, content, "multiline literal", allow_nl = True):
         return ""
 
-    # Normalize CRLF to LF, and check for bare CR (handled by _validate_text)
-    res = content.replace("\r\n", "\n")
     state.pos[0] = idx + 3 + ex
-    return res
+    return content
 
 def _parse_string(state):
     p = state.pos[0]
@@ -473,20 +474,17 @@ def _parse_key(state):
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_literal_string(state)
-    pos = state.pos[0]
-    data = state.data
-    length = state.len
 
     # Hand-parse bare keys: [A-Za-z0-9_-]+
     start = pos
-    for _ in range(length - pos):
-        if pos >= length:
-            break
-        char = data[pos]
-        if (char >= "a" and char <= "z") or (char >= "A" and char <= "Z") or (char >= "0" and char <= "9") or char == "_" or char == "-":
+
+    # Use a loop over a limited window to avoid huge string slices.
+    # Most bare keys are short.
+    for _ in range(state.len - pos):
+        if pos < state.len and data[pos] in _BARE_KEY_CHARS:
             pos += 1
-            continue
-        break
+        else:
+            break
 
     if pos > start:
         key = data[start:pos]
@@ -640,16 +638,17 @@ def _parse_time_manual(state):
         if pos < length and data[pos] == ".":
             dp = pos
             pos += 1
-            has_f = False
-            for _ in range(length - pos):
-                if pos < length and data[pos].isdigit():
-                    pos += 1
-                    has_f = True
-                else:
-                    break
-            if not has_f:
+
+            # Consume fractional digits
+            rest = data[pos:]
+            stripped = rest.lstrip("0123456789")
+            consumed = len(rest) - len(stripped)
+
+            if consumed == 0:
                 _fail(state, "Fractional part must have digits")
                 return None
+
+            pos += consumed
             timestr += data[dp:pos]
     else:
         timestr += ":00"
@@ -1114,6 +1113,10 @@ def decode(data, default = None, expand_values = False):
     Returns:
       The decoded Starlark structure (dict/list) or the default value on error.
     """
+
+    # TOML allows parsers to normalize newlines. Doing it up front
+    # significantly simplifies the rest of the parsing logic.
+    data = data.replace("\r\n", "\n")
     state = _parser(data, default)
 
     # Process line by line (roughly)
@@ -1131,9 +1134,6 @@ def decode(data, default = None, expand_values = False):
             state.pos[0] += 1
             continue
         if char == "\r":
-            if state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
-                state.pos[0] += 2
-                continue
             _fail(state, "Bare CR invalid")
             break
 
@@ -1152,8 +1152,6 @@ def decode(data, default = None, expand_values = False):
             char = state.data[state.pos[0]]
             if char == "\n":
                 state.pos[0] += 1
-            elif char == "\r" and state.pos[0] + 1 < state.len and state.data[state.pos[0] + 1] == "\n":
-                state.pos[0] += 2
             elif char == "#":
                 _skip_ws(state)  # handles comment until newline
             else:
@@ -1173,7 +1171,7 @@ def _skip_ws_nl(state):
         if pos >= length:
             break
         char = data[pos]
-        if char in " \t\n\r":
+        if char in " \t\n":
             state.pos[0] += 1
             continue
         if char == "#":
