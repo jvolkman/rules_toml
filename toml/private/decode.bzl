@@ -774,7 +774,6 @@ def _parse_complex_iterative(state):
         fr = stack[-1]
         cont = fr[0]
         mode = fr[1]
-        inlines = fr[3]
         _skip_ws_nl(state)
         if state.pos[0] >= state.len:
             _fail(state, "EOF in complex")
