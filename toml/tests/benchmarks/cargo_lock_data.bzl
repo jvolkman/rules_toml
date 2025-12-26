@@ -1,3 +1,5 @@
+"""Cargo.lock benchmarking"""
+
 CARGO_LOCK = """
 [[package]]
 name = "aes"
