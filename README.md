@@ -1,6 +1,6 @@
 # toml.bzl
 
-A performance-optimized TOML 1.0.0 parser for Starlark.
+A pure Starlark TOML 1.1.0 parser.
 
 ## Usage
 
@@ -51,8 +51,6 @@ load("@toml.bzl//toml", "decode", "encode")
 config = decode("key = 'value'")
 content = encode({"a": 1})
 ```
-
-## Features
 
 - **Spec Compliant**: Supports 100% of TOML 1.0.0 for both decoding and encoding.
 - **Optimized**: Uses native Starlark string methods and operators to minimize interpreter overhead.
