@@ -21,33 +21,28 @@ server = "192.168.1.1"
 ports = [ 8000, 8001, 8002 ]
 """
 
+# Decode
 config = toml.decode(content)
 print(config["database"]["server"])
+
+# Encode
+encoded = toml.encode(config)
+print(encoded)
 ```
 
-Alternatively, you can load the `decode` function directly:
+## Performance
 
-```starlark
-load("@toml.bzl//toml", "decode")
+`toml.bzl` is highly optimized for the Starlark interpreter, leveraging native string operations to achieve high throughput while maintaining 100% compliance with TOML 1.1.0.
 
-config = toml.decode("key = 'value'")
+### Benchmarks
 
-# Encoding
-data = {
-    "database": {
-        "server": "192.168.1.1",
-        "ports": [8000, 8001, 8002],
-    }
-}
+Tested on an **Apple M3 MacBook Pro**:
 
-content = toml.encode(data)
-```
+| Document Type | Size | Time | Performance |
+| :--- | :--- | :--- | :--- |
+| **Cargo.lock** | 1.5 MB | **188 ms** | ~8 MB/s |
+| **Scalar Parsing** | - | - | ~35,000 items/s |
 
-Alternatively, you can load the functions directly:
+### Compliance
 
-```starlark
-load("@toml.bzl//toml", "decode", "encode")
-
-config = decode("key = 'value'")
-content = encode({"a": 1})
-```
+The implementation is verified against the [toml-test](https://github.com/toml-lang/toml-test) suite, passing all **901** compliance tests (decoding and encoding).
