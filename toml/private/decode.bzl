@@ -698,21 +698,8 @@ def _parse_scalar(state):
             # consume until non-hex
             # valid hex: 0-9 a-f A-F _
             # rough scan
-            end = p + 2
-
             # Optimization: slice a window to avoid huge copy
             window = d[p:min(n, p + 64)]
-
-            # lstrip non-matching from the window is hard because lstrip strips PREDEFINED set.
-            # We want to find the END of the match.
-            # window.lstrip(...) gives the TAIL.
-            # tail = window[2:].lstrip(_HEX_DIGITS)
-            # match_len = len(window) - len(tail)
-            # match_len includes "0x" (2 chars) + hex digits
-            # No, window[2:] stripped means match_len is just digits len relative to window[2:].
-            # So total len = 2 + (len(window) - 2 - len(tail)) = len(window) - len(tail).
-
-            # If tail is empty, we might have truncated. But 64 chars for int is enough.
 
             tail = window[2:].lstrip(_HEX_DIGITS)
             match_len = len(window) - len(tail)
@@ -857,7 +844,7 @@ def _parse_scalar(state):
                 num_len += frac_len
 
         # Check for exponent
-        is_exp = False
+        # Check for exponent
         if p + num_len < n and d[p + num_len] in "eE":
             # We must check for optional sign then digits
             exp_len = 1
@@ -869,7 +856,6 @@ def _parse_scalar(state):
             # Check for digits
             if idx < n and d[idx].isdigit():
                 is_float = True
-                is_exp = True
                 num_len += exp_len
 
                 w_start = idx
