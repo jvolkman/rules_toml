@@ -16,7 +16,7 @@ bazel_dep(name = "bazelrc-preset.bzl", version = "1.8.0", dev_dependency = True)
 bazel_dep(name = "re.bzl", version = "0.1.0")
 git_override(
     module_name = "re.bzl",
-    commit = "89096f7372aeb1351e82847b76d069fc2737b84f",
+    commit = "1212d2d312dd511252998f822d559c77c6888c3a",
     remote = "https://github.com/jvolkman/re.bzl.git",
 )
 
