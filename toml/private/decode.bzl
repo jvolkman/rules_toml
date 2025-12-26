@@ -5,18 +5,12 @@ It is optimized for performance in the Starlark interpreter by using native stri
 methods and a chunk-based parsing strategy.
 """
 
-load("@re.bzl", "re")
-
 # --- Tokens ---
-_RE_SCALAR = re.compile(
-    r"(?P<hex>^0x[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*)|" +
-    r"(?P<oct>^0o[0-7]+(?:_[0-7]+)*)|" +
-    r"(?P<bin>^0b[01]+(?:_[01]+)*)|" +
-    r"(?P<date>^\d{4}-\d{2}-\d{2})|" +
-    r"(?P<time>^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)|" +
-    r"(?P<float>^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*)(?:(?:\.[0-9](?:[0-9]|_[0-9])*)(?:[eE][+-]?[0-9](?:[0-9]|_[0-9])*)?|(?:[eE][+-]?[0-9](?:[0-9]|_[0-9])*)))|" +
-    r"(?P<int>^[+-]?(?:0|[1-9](?:[0-9]|_[0-9])*))",
-)
+# --- Constants for Manual Parsing ---
+_DIGITS = "0123456789_"
+_HEX_DIGITS = "0123456789abcdefABCDEF_"
+_OCT_DIGITS = "01234567_"
+_BIN_DIGITS = "01_"
 
 _DEL = "\177"
 
@@ -693,67 +687,235 @@ def _parse_scalar(state):
             state.pos[0] += 4
             return struct(toml_type = "float", value = "-inf" if c == "-" else "inf")
 
-    # Use combined regex for all scalar types
-    window = d[p:p + 128]
-    m = _RE_SCALAR.match(window)
-    if not m:
-        return None
+    # Manual dispatch for scalars
+    c = d[p]
 
-    grp = m.lastgroup
-    val = m.group()
-    state.pos[0] += len(val)
+    # Hex/Oct/Bin
+    if c == "0" and p + 1 < n:
+        n2 = d[p + 1]
+        if n2 == "x":
+            # Hex
+            # consume until non-hex
+            # valid hex: 0-9 a-f A-F _
+            # rough scan
+            end = p + 2
 
-    if grp == "int":
-        return int(val.replace("_", ""))
-    elif grp == "float":
-        return float(val.replace("_", ""))
-    elif grp == "hex":
-        return int(val.replace("_", ""), 16)
-    elif grp == "oct":
-        return int(val.replace("_", ""), 8)
-    elif grp == "bin":
-        return int(val.replace("_", ""), 2)
-    elif grp == "date":
-        # Date logic requires checking for time/offset parts which might follow
-        ds = val
-        if not _validate_date(state, int(ds[0:4]), int(ds[5:7]), int(ds[8:10])):
-            return None
+            # Optimization: slice a window to avoid huge copy
+            window = d[p:min(n, p + 64)]
 
-        if state.pos[0] < n and d[state.pos[0]] in "Tt ":
-            sep = d[state.pos[0]]
-            state.pos[0] += 1
+            # lstrip non-matching from the window is hard because lstrip strips PREDEFINED set.
+            # We want to find the END of the match.
+            # window.lstrip(...) gives the TAIL.
+            # tail = window[2:].lstrip(_HEX_DIGITS)
+            # match_len = len(window) - len(tail)
+            # match_len includes "0x" (2 chars) + hex digits
+            # No, window[2:] stripped means match_len is just digits len relative to window[2:].
+            # So total len = 2 + (len(window) - 2 - len(tail)) = len(window) - len(tail).
+
+            # If tail is empty, we might have truncated. But 64 chars for int is enough.
+
+            tail = window[2:].lstrip(_HEX_DIGITS)
+            match_len = len(window) - len(tail)
+            val = d[p:p + match_len]
+            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
+                return None
+            if len(val) > 2 and val[2] == "_":
+                return None
+            state.pos[0] += match_len
+            return int(val.replace("_", ""), 16)
+        elif n2 == "o":
+            window = d[p:min(n, p + 64)]
+            tail = window[2:].lstrip(_OCT_DIGITS)
+            match_len = len(window) - len(tail)
+            val = d[p:p + match_len]
+            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
+                return None
+            if len(val) > 2 and val[2] == "_":
+                return None
+            state.pos[0] += match_len
+            return int(val.replace("_", ""), 8)
+        elif n2 == "b":
+            window = d[p:min(n, p + 64)]
+            tail = window[2:].lstrip(_BIN_DIGITS)
+            match_len = len(window) - len(tail)
+            val = d[p:p + match_len]
+            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
+                return None
+            if len(val) > 2 and val[2] == "_":
+                return None
+            state.pos[0] += match_len
+            return int(val.replace("_", ""), 2)
+
+    # Date vs Number
+    # Dates start with digit.
+    # Numbers start with digit or +/-.
+    if c.isdigit() or c == "+" or c == "-":
+        # Check for date: YYYY-MM-DD
+        # Minimal check: \d{4}-
+
+        # We peek 5 chars for date/time signature
+        sig = d[p:min(n, p + 5)]
+        is_date = False
+        if len(sig) == 5 and sig[4] == "-" and sig[0].isdigit() and sig[1].isdigit() and sig[2].isdigit() and sig[3].isdigit():
+            is_date = True
+
+        if is_date:
+            # Extract date string YYYY-MM-DD
+            ds = d[p:p + 10]
+            if len(ds) == 10 and ds[4] == "-" and ds[7] == "-" and ds[:4].isdigit() and ds[5:7].isdigit() and ds[8:].isdigit():
+                if not _validate_date(state, int(ds[0:4]), int(ds[5:7]), int(ds[8:10])):
+                    return None
+                state.pos[0] += 10
+
+                # Check for Time and Offset
+                if state.pos[0] < n and d[state.pos[0]] in "Tt ":
+                    sep = d[state.pos[0]]
+                    state.pos[0] += 1
+                    tr = _parse_time_manual(state)
+                    if tr:
+                        ts, tl = tr
+                        state.pos[0] += tl
+
+                        # Offset ...
+                        # Reuse the logic from the old function?
+                        # The old function had heavy nesting.
+                        # Simplified:
+                        if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
+                            return None
+
+                        vs = ds + sep + ts
+                        if state.pos[0] < n:
+                            if d[state.pos[0]] in "Zz":
+                                state.pos[0] += 1
+                                return struct(toml_type = "datetime", value = (vs + "Z").replace(" ", "T").replace("t", "T"))
+                            if d[state.pos[0]] in "+-":
+                                ch = d[state.pos[0]:state.pos[0] + 6]
+                                if (len(ch) == 6 and ch[0] in "+-" and ch[1].isdigit() and ch[2].isdigit() and ch[3] == ":" and ch[4].isdigit() and ch[5].isdigit()):
+                                    oh = int(ch[1:3])
+                                    om = int(ch[4:6])
+                                    if not _validate_offset(state, oh, om):
+                                        return None
+                                    state.pos[0] += 6
+                                    return struct(toml_type = "datetime", value = (vs + ch).replace(" ", "T").replace("t", "T"))
+                        return struct(toml_type = "datetime-local", value = vs.replace(" ", "T").replace("t", "T"))
+                    else:
+                        state.pos[0] -= 1
+                return struct(toml_type = "date-local", value = ds)
+
+        # Time check
+        if len(sig) >= 3 and sig[2] == ":":
+            # Likely time "HH:MM"
+            # 01234567
+            # HH:MM:SS
+            # HH:MM:SS.ffffff
+
+            # Let's rely on _parse_time_manual logic but we need to invoke it.
+            # Note: _parse_time_manual increments state.pos!
+            # We should reset if it fails?
+
+            old_pos = state.pos[0]
             tr = _parse_time_manual(state)
             if tr:
                 ts, tl = tr
-                state.pos[0] += tl
+                state.pos[0] = old_pos + tl
                 if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
                     return None
-                vs = ds + sep + ts
-                if state.pos[0] < n:
-                    if d[state.pos[0]] in "Zz":
-                        state.pos[0] += 1
-                        return struct(toml_type = "datetime", value = (vs + "Z").replace(" ", "T").replace("t", "T"))
-                    if d[state.pos[0]] in "+-":
-                        ch = d[state.pos[0]:state.pos[0] + 6]
-                        if (len(ch) == 6 and ch[0] in "+-" and ch[1].isdigit() and ch[2].isdigit() and ch[3] == ":" and ch[4].isdigit() and ch[5].isdigit()):
-                            oh = int(ch[1:3])
-                            om = int(ch[4:6])
-                            if not _validate_offset(state, oh, om):
-                                return None
-                            state.pos[0] += 6
-                            return struct(toml_type = "datetime", value = (vs + ch).replace(" ", "T").replace("t", "T"))
-                return struct(toml_type = "datetime-local", value = vs.replace(" ", "T").replace("t", "T"))
-            else:
-                state.pos[0] -= 1
-        return struct(toml_type = "date-local", value = ds)
+                return struct(toml_type = "time-local", value = ts)
+            state.pos[0] = old_pos
 
-    elif grp == "time":
-        ts = val
-        if len(ts) == 5:
-            ts += ":00"
-        if not _validate_time(state, int(ts[0:2]), int(ts[3:5]), int(ts[6:8])):
+        # Number (Int or Float)
+        # We must scan strictly to avoid consuming invalid sequences like "1e2.3" as a single chunk
+
+        # 1. Integer part
+        num_len = 0
+        if d[p] in "+-":
+            num_len += 1
+
+        # Consume integer digits
+        # We use lstrip on a window from current pos
+        w_start = p + num_len
+        if w_start < n:
+            window = d[w_start:min(n, w_start + 64)]
+            tail = window.lstrip(_DIGITS)
+
+            # Digits consumed
+            digits_len = len(window) - len(tail)
+            num_len += digits_len
+
+        # Check for fractional part
+        is_float = False
+        if p + num_len < n and d[p + num_len] == ".":
+            # We must strict check: TOML requires digits after dot
+            if p + num_len + 1 < n and d[p + num_len + 1].isdigit():
+                is_float = True
+                num_len += 1  # Consume '.'
+
+                w_start = p + num_len
+                window = d[w_start:min(n, w_start + 64)]
+                tail = window.lstrip(_DIGITS)
+                frac_len = len(window) - len(tail)
+                num_len += frac_len
+
+        # Check for exponent
+        is_exp = False
+        if p + num_len < n and d[p + num_len] in "eE":
+            # We must check for optional sign then digits
+            exp_len = 1
+            idx = p + num_len + 1
+            if idx < n and d[idx] in "+-":
+                exp_len += 1
+                idx += 1
+
+            # Check for digits
+            if idx < n and d[idx].isdigit():
+                is_float = True
+                is_exp = True
+                num_len += exp_len
+
+                w_start = idx
+                window = d[w_start:min(n, w_start + 64)]
+                tail = window.lstrip(_DIGITS)
+                exp_digits_len = len(window) - len(tail)
+                num_len += exp_digits_len
+
+        # Now we have the strictly scanned number string.
+        val = d[p:p + num_len]
+
+        # Sanity check: if we just matched a sign "+", that's not a number.
+        if num_len == 0 or (num_len == 1 and val in "+-"):
             return None
-        return struct(toml_type = "time-local", value = ts)
+
+        # Validate underscores and leading zeros
+        check_val = val
+        if check_val[0] in "+-":
+            check_val = check_val[1:]
+
+        if not check_val:
+            return None
+
+        if check_val[0] == "_" or check_val[-1] == "_" or "__" in check_val:
+            return None  # Invalid structure
+
+        # Validate integer start (must be digit, cannot be '.' or 'e')
+        if not check_val[0].isdigit():
+            return None
+
+        # Leading zero check
+        # If starts with 0, must be single "0" or followed by "." or "e/E".
+        # "01" -> invalid. "0_1" -> invalid.
+        if len(check_val) > 1 and check_val[0] == "0" and check_val[1] not in ".eE":
+            return None
+
+        if is_float:
+            # Additional float validation
+            if "_." in val or "._" in val or "_e" in val or "e_" in val or "_E" in val or "E_" in val:
+                return None
+
+            state.pos[0] += num_len
+            return float(val.replace("_", ""))
+        else:
+            state.pos[0] += num_len
+            return int(val.replace("_", ""))
 
     return None
 

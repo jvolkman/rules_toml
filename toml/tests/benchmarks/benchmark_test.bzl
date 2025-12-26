@@ -8,7 +8,7 @@ def _benchmark_test_impl(ctx):
 
     # Run benchmarks with a large number of iterations
     # The time will be measured by Bazel
-    run_benchmarks(n = 100)
+    run_benchmarks(n = 1000)
 
     return unittest.end(env)
 
