@@ -25,3 +25,19 @@ bzl_library(
 benchmark_test(
     name = "benchmark_test",
 )
+
+bzl_library(
+    name = "cargo_lock_prof_lib",
+    srcs = ["cargo_lock_prof.bzl"],
+    deps = ["//toml"],
+)
+
+benchmark_test(
+    name = "cargo_lock_benchmark",
+)
+
+load(":cargo_lock_prof.bzl", "benchmark_runner")
+
+benchmark_runner(
+    name = "benchmark_prof",
+)

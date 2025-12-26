@@ -1,8 +1,22 @@
 """TOML decoder implementation for Starlark.
 
 This module provides functions for parsing TOML documents into Starlark structures.
-It is optimized for performance in the Starlark interpreter by using native string
-methods and a chunk-based parsing strategy.
+It is optimized for performance in the Starlark interpreter via several key strategies:
+
+1. Performance Considerations:
+   - Windowed String Operations: To avoid O(N) string slicing costs (which are
+     inherent in Java-based Starlark strings), this parser uses small fixed-size
+     windows (e.g., 64 bytes) for searches and `lstrip` calls. This prevents
+     pathological O(N^2) behavior on large documents.
+   - Iterative Design: Since Starlark disallows recursion, the parser is
+     implemented iteratively with a manual stack. This also helps reduce
+     function call overhead in hot loops.
+   - Global Document Safety: An initial O(N) pass checks if the entire document is
+     pure printable ASCII. If so, robust UTF-8 and control character validation
+     is skipped, providing a significant speedup for common TOML files.
+   - Operator Efficiency: Prefer built-in operators (e.g., `list += [item]`) over
+     method calls (e.g., `list.append(item)`) as they are significantly faster
+     in the Starlark interpreter.
 """
 
 # --- Constants for Tokenization ---
@@ -14,17 +28,13 @@ _BIN_DIGITS = "01_"
 _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 _VALID_ASCII_CHARS = "\n\t !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
-_REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
-
-# _MAX_ITERATIONS_MULTIPLIER is used to bound iterative loops in lieu of 'while'.
-# Theoretical bound is 2 * N (length of string), as every step either consumes
-# a character or handles a structural delimiter transition. We use 5 as a safety
-# margin for future refactors and complex error handling.
 _MAX_ITERATIONS_MULTIPLIER = 5
+_REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
 
 # --- Status & Error Handling ---
 
 def _errors():
+    """Creates a basic error collection structure."""
     errors = []
 
     def add(msg):
@@ -36,6 +46,7 @@ def _errors():
     return struct(add = add, get = get)
 
 def _parser(data, default):
+    """Initializes the parser state structure."""
     root_dict = {}
     return struct(
         pos = [0],
@@ -46,6 +57,7 @@ def _parser(data, default):
         current_path = [[]],
         errors = _errors(),
         error = [None],
+        is_safe = [False],
         has_default = default != None,
         path_types = {(): "table"},
         explicit_paths = {(): True},
@@ -53,20 +65,17 @@ def _parser(data, default):
     )
 
 def _fail(state, msg):
-    if not state.error[0]:
+    """Reports a parsing error and fails the build unless a default is provided."""
+    if state.error[0] == None:
         state.error[0] = msg
-        # print("Context: " + state.data[max(0, state.pos[0]-20):min(state.len, state.pos[0]+20)])
 
     if not state.has_default:
         fail(msg)
 
-def _has_error(state):
-    return state.error[0] != None
-
 def _skip_ws(state):
+    """Skips whitespace and comments in the input stream."""
     data = state.data
     length = state.len
-
     for _ in range(length):
         pos = state.pos[0]
         if pos >= length:
@@ -75,6 +84,13 @@ def _skip_ws(state):
         char = data[pos]
         if char == " " or char == "\t":
             state.pos[0] += 1
+
+            # FAST PATH: If next char is not space/tab/comment, we are done
+            # This handles most 'key = value' cases instantly.
+            if pos + 1 < length:
+                next_char = data[pos + 1]
+                if next_char != " " and next_char != "\t" and next_char != "#":
+                    return
             continue
 
         if char == "#":
@@ -89,7 +105,8 @@ def _skip_ws(state):
         break
 
 def _expect(state, char):
-    if state.error[0]:
+    """Asserts that the next character in the stream is `char` and consumes it."""
+    if state.error[0] != None:
         return
     if state.pos[0] >= state.len or state.data[state.pos[0]] != char:
         _fail(state, "Expected '%s' at %d" % (char, state.pos[0]))
@@ -99,18 +116,21 @@ def _expect(state, char):
 # --- Types & Validation ---
 
 def _is_dict(value):
+    """Returns True if the value is a dictionary."""
     return type(value) == "dict"
 
+# buildifier: disable=list-append
 def _validate_text(state, text, context, allow_nl = False):
-    # Check for bare CR if allow_nl is False, or other simple constraints.
-    if "\r" in text:
-        if not allow_nl:
+    """Validates that text contains only valid TOML characters and UTF-8."""
+
+    # GLOBAL FAST PATH: If the whole document was pre-validated as safe.
+    if state.is_safe[0]:
+        if not allow_nl and "\n" in text:
             _fail(state, "Control char in %s" % context)
             return False
+        return True
 
-    elif not allow_nl and "\n" in text:
-        _fail(state, "Control char in %s" % context)
-        return False
+    # Check for bare CR if allow_nl is False, or other simple constraints.
 
     # FAST PATH: Check if string is pure valid ASCII
     # We include NL in common set as it's very common and safe to check once up front.
@@ -118,13 +138,11 @@ def _validate_text(state, text, context, allow_nl = False):
         return True
 
     # SLOW PATH: Robust byte-level validation.
-    # We use the old logic because it correctly handles invalid UTF-8 cases
-    # that toml-test expects us to fail on.
     length = len(text)
     idx = 0
     for _ in range(length):
         if idx >= length:
-            break
+            return True
         char = text[idx]
 
         byte_len = 0
@@ -166,6 +184,7 @@ def _validate_text(state, text, context, allow_nl = False):
     return True
 
 def _is_hex(hex_str):
+    """Returns True if the string is a valid hexadecimal sequence."""
     for i in range(len(hex_str)):
         char = hex_str[i]
         if not ((char >= "0" and char <= "9") or (char >= "a" and char <= "f") or (char >= "A" and char <= "F")):
@@ -173,10 +192,12 @@ def _is_hex(hex_str):
     return True
 
 def _to_hex(val, width):
+    """Formats an integer as a zero-padded hexadecimal string."""
     s = "%x" % val
     return ("0" * (width - len(s))) + s if len(s) < width else s
 
 def _codepoint_to_string(code):
+    """Converts a Unicode codepoint to a Starlark string."""
     if code <= 0xFFFF:
         return json.decode('"\\u' + _to_hex(code, 4) + '"')
     v = code - 0x10000
@@ -185,9 +206,11 @@ def _codepoint_to_string(code):
     return json.decode('"\\u' + _to_hex(hi, 4) + "\\u" + _to_hex(lo, 4) + '"')
 
 def _is_leap(year):
+    """Returns True if the year is a leap year."""
     return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
 
 def _get_days_in_month(month, year):
+    """Returns the number of days in a given month and year."""
     if month in [1, 3, 5, 7, 8, 10, 12]:
         return 31
     if month in [4, 6, 9, 11]:
@@ -197,18 +220,21 @@ def _get_days_in_month(month, year):
     return 0
 
 def _validate_date(state, year, month, day):
+    """Validates that the given date components form a valid calendar date."""
     if year < 0 or year > 9999 or month < 1 or month > 12 or day < 1 or day > _get_days_in_month(month, year):
         _fail(state, "Invalid date: %d-%d-%d" % (year, month, day))
         return False
     return True
 
 def _validate_time(state, hour, minute, second):
+    """Validates that the given time components form a valid wall clock time."""
     if hour < 0 or hour > 23 or minute < 0 or minute > 59 or (second < 0 or second > 60):
         _fail(state, "Invalid time: %d:%d:%d" % (hour, minute, second))
         return False
     return True
 
 def _validate_offset(state, hour, minute):
+    """Validates that the given hour/minute offset is within allowed bounds."""
     if hour < 0 or hour > 23 or minute < 0 or minute > 59:
         _fail(state, "Invalid offset: %d:%d" % (hour, minute))
         return False
@@ -217,6 +243,7 @@ def _validate_offset(state, hour, minute):
 # --- String Parsing ---
 
 def _escape_char(char):
+    """Returns the literal character for a standard TOML escape sequence."""
     if char == "b":
         return "\b"
     if char == "t":
@@ -235,13 +262,15 @@ def _escape_char(char):
         return '"'
     return None
 
+# buildifier: disable=list-append
 def _parse_basic_string(state):
+    """Parses a basic string (double quoted)."""
     if state.pos[0] >= state.len or state.data[state.pos[0]] != '"':
         _fail(state, "Expected '\"' at %d" % state.pos[0])
         return ""
     state.pos[0] += 1
 
-    if state.error[0]:
+    if state.error[0] != None:
         return ""
 
     data = state.data
@@ -267,24 +296,26 @@ def _parse_basic_string(state):
 
     # SLOW PATH: Has escapes, process in chunks
     chars = []
-    for _ in range(length):
+    cached_quote_idx = quote_idx
+    for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
         pos = state.pos[0]
         if pos >= length:
             _fail(state, "Unterminated string")
             return ""
 
-        # Find next delimiter or next escape (bounded by delimiter)
-        # We RE-SEARCH quote_idx because pos might have moved after an escape.
-        quote_idx = data.find('"', pos)
-        if quote_idx == -1:
-            _fail(state, "Unterminated string")
-            return ""
+        # Update cached search points if we've moved past them
+        if pos > cached_quote_idx:
+            cached_quote_idx = data.find('"', pos)
+            if cached_quote_idx == -1:
+                _fail(state, "Unterminated string")
+                return ""
 
-        escape_idx = data.find("\\", pos, quote_idx)
+        # In SLOW path we always search for next escape bounded by the current quote
+        escape_idx = data.find("\\", pos, cached_quote_idx)
 
-        next_idx = quote_idx
+        next_idx = cached_quote_idx
         is_esc = False
-        if escape_idx != -1:  # Guaranteed < quote_idx by find bound
+        if escape_idx != -1:
             next_idx = escape_idx
             is_esc = True
 
@@ -292,7 +323,7 @@ def _parse_basic_string(state):
             chunk = data[pos:next_idx]
             if not _validate_text(state, chunk, "string", allow_nl = False):
                 return ""
-            chars.append(chunk)
+            chars += [chunk]
 
         state.pos[0] = next_idx
         if not is_esc:
@@ -308,12 +339,12 @@ def _parse_basic_string(state):
         state.pos[0] += 1
         sm = _escape_char(esc)
         if sm:
-            chars.append(sm)
+            chars += [sm]
             continue
         if esc == "x":
             hex_str = data[state.pos[0]:state.pos[0] + 2]
             if len(hex_str) == 2 and _is_hex(hex_str):
-                chars.append(_codepoint_to_string(int(hex_str, 16)))
+                chars += [_codepoint_to_string(int(hex_str, 16))]
                 state.pos[0] += 2
                 continue
         if esc == "u" or esc == "U":
@@ -322,7 +353,7 @@ def _parse_basic_string(state):
             if len(hex_str) == size and _is_hex(hex_str):
                 code = int(hex_str, 16)
                 if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
-                    chars.append(_codepoint_to_string(code))
+                    chars += [_codepoint_to_string(code)]
                     state.pos[0] += size
                     continue
         _fail(state, "Invalid escape")
@@ -330,8 +361,9 @@ def _parse_basic_string(state):
     return ""
 
 def _parse_literal_string(state):
+    """Parses a literal string (single quoted)."""
     _expect(state, "'")
-    if _has_error(state):
+    if state.error[0] != None:
         return ""
     pos = state.pos[0]
     data = state.data
@@ -345,7 +377,9 @@ def _parse_literal_string(state):
     state.pos[0] = idx + 1
     return content
 
+# buildifier: disable=list-append
 def _parse_multiline_basic_string(state):
+    """Parses a multiline basic string (triple quoted)."""
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
@@ -353,7 +387,7 @@ def _parse_multiline_basic_string(state):
     chars = []
     d = state.data
     n = state.len
-    for _ in range(n):
+    for _ in range(n * _MAX_ITERATIONS_MULTIPLIER):
         p = state.pos[0]
         if p >= n:
             _fail(state, "Unterminated multiline string")
@@ -375,10 +409,10 @@ def _parse_multiline_basic_string(state):
 
         if next_idx > p:
             chunk = d[p:next_idx]
-            if not _validate_text(state, chunk, "multiline basic", allow_nl = True):
+            if not _validate_text(state, chunk, "multiline string", allow_nl = True):
                 return ""
 
-            chars.append(chunk)
+            chars += [chunk]
 
         state.pos[0] = next_idx
         if not is_esc:
@@ -392,7 +426,7 @@ def _parse_multiline_basic_string(state):
                 else:
                     break
             for _ in range(ex):
-                chars.append('"')
+                chars += ['"']
             return "".join(chars)
 
         # Handle escape
@@ -406,7 +440,7 @@ def _parse_multiline_basic_string(state):
             hl = False
 
             # Scan for first newline
-            for _ in range(n - tp):
+            for _ in range(n):
                 if tp >= n:
                     break
                 window = d[tp:tp + 64]
@@ -422,7 +456,7 @@ def _parse_multiline_basic_string(state):
 
             if hl:
                 # Skip all subsequent whitespace/newlines
-                for _ in range(n - tp):
+                for _ in range(n):
                     if tp >= n:
                         break
                     window = d[tp:tp + 64]
@@ -435,7 +469,7 @@ def _parse_multiline_basic_string(state):
                 continue
         sm = _escape_char(esc)
         if sm:
-            chars.append(sm)
+            chars += [sm]
             state.pos[0] += 1
             continue
         if esc in "uUx":
@@ -445,7 +479,7 @@ def _parse_multiline_basic_string(state):
             if len(hs) == sz and _is_hex(hs):
                 code = int(hs, 16)
                 if (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF):
-                    chars.append(_codepoint_to_string(code))
+                    chars += [_codepoint_to_string(code)]
                     state.pos[0] += sz
                     continue
         _fail(state, "Invalid escape")
@@ -453,6 +487,7 @@ def _parse_multiline_basic_string(state):
     return ""
 
 def _parse_multiline_literal_string(state):
+    """Parses a multiline literal string (triple single-quoted)."""
     state.pos[0] += 2
     if state.pos[0] < state.len and state.data[state.pos[0]] == "\n":
         state.pos[0] += 1
@@ -479,6 +514,7 @@ def _parse_multiline_literal_string(state):
     return content
 
 def _parse_string(state):
+    """Dispatches to the appropriate string parsing function based on quotes."""
     p = state.pos[0]
     d = state.data
     if d[p] == '"':
@@ -494,6 +530,7 @@ def _parse_string(state):
     return ""
 
 def _parse_key(state):
+    """Parses a TOML key (bare, basic, or literal)."""
     pos = state.pos[0]
     data = state.data
     if data[pos] == '"':
@@ -511,7 +548,8 @@ def _parse_key(state):
     start = pos
 
     # Use windowed lstrip to avoid character loop overhead
-    for _ in range(state.len - pos):
+    # Bounded range to avoid allocation
+    for _ in range(state.len):
         if pos >= state.len:
             break
         window = data[pos:pos + 64]
@@ -529,14 +567,16 @@ def _parse_key(state):
     _fail(state, "Invalid key format")
     return ""
 
+# buildifier: disable=list-append
 def _parse_dotted_key(state):
+    """Parses a dotted key into a list of components."""
     keys = []
     for _ in range(state.len):
         _skip_ws(state)
         k = _parse_key(state)
-        if _has_error(state):
+        if state.error[0] != None:
             return keys
-        keys.append(k)
+        keys += [k]
         _skip_ws(state)
         if state.pos[0] < state.len and state.data[state.pos[0]] == ".":
             state.pos[0] += 1
@@ -545,6 +585,7 @@ def _parse_dotted_key(state):
     return keys
 
 def _get_or_create_table(state, keys, is_array):
+    """Navigates to or creates the table structure specified by the dotted keys."""
     current = state.root
     path = []
     for i in range(len(keys) - 1):
@@ -605,6 +646,7 @@ def _get_or_create_table(state, keys, is_array):
         return new_tab
 
 def _parse_table(state):
+    """Parses a table header [foo.bar] or [[foo.bar]]."""
     _expect(state, "[")
     is_array_of_tables = False
     if state.pos[0] < state.len and state.data[state.pos[0]] == "[":
@@ -614,20 +656,21 @@ def _parse_table(state):
     _expect(state, "]")
     if is_array_of_tables:
         _expect(state, "]")
-    if _has_error(state):
+    if state.error[0] != None:
         return
     state.current_path[0] = keys
     state.current_table[0] = _get_or_create_table(state, keys, is_array_of_tables)
 
 def _parse_key_value(state, target):
+    """Parses a key = value pair and inserts it into the target dictionary."""
     keys = _parse_dotted_key(state)
-    if _has_error(state) or not keys:
+    if state.error[0] != None or not keys:
         return
     _skip_ws(state)
     _expect(state, "=")
     _skip_ws(state)
     value = _parse_value(state)
-    if _has_error(state):
+    if state.error[0] != None:
         return
     current = target
     base_path = state.current_path[0]
@@ -660,6 +703,7 @@ def _parse_key_value(state, target):
     state.path_types[last_path_tuple] = "inline" if type(value) == "dict" else ("array" if type(value) == "list" else "scalar")
 
 def _parse_time_manual(state):
+    """Manually parses a TOML time string (HH:MM:SS.ffffff) from the input."""
     pos = state.pos[0]
     data = state.data
     length = state.len
@@ -690,6 +734,7 @@ def _parse_time_manual(state):
     return timestr, pos - state.pos[0]
 
 def _parse_scalar(state):
+    """Parses simple scalar values like numbers, booleans, and dates."""
     pos = state.pos[0]
     data = state.data
     length = state.len
@@ -946,37 +991,40 @@ _MODE_TABLE_KEY = 3
 _MODE_TABLE_VAL = 4
 _MODE_TABLE_COMMA = 5
 
+# buildifier: disable=list-append
 def _parse_complex_iterative(state):
+    """Parses inline tables and arrays iteratively using a manual stack."""
     char = state.data[state.pos[0]]
     res = [] if char == "[" else {}
     stack = [[res, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
     state.pos[0] += 1
+
     for _ in range(state.len * _MAX_ITERATIONS_MULTIPLIER):
-        if not stack or _has_error(state):
-            break
+        if not stack or state.error[0] != None:
+            return res
         fr = stack[-1]
         cont = fr[0]
         mode = fr[1]
         _skip_ws_nl(state)
         if state.pos[0] >= state.len:
             _fail(state, "EOF in complex")
-            break
+            return res
         char = state.data[state.pos[0]]
         if mode == _MODE_ARRAY_VAL:
             if char == "]":
                 state.pos[0] += 1
                 stack.pop()
                 continue
-            if char in "[{":
+            if char == "[" or char == "{":
                 new_container = [] if char == "[" else {}
-                cont.append(new_container)
+                cont += [new_container]
                 state.pos[0] += 1
-                stack.append([new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}])
+                stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
                 fr[1] = _MODE_ARRAY_COMMA
                 continue
             val = _parse_val_nested(state)
             if val != None:
-                cont.append(val)
+                cont += [val]
                 fr[1] = _MODE_ARRAY_COMMA
                 continue
             _fail(state, "Value expected in array")
@@ -1002,18 +1050,12 @@ def _parse_complex_iterative(state):
             fr[1] = _MODE_TABLE_VAL
         elif mode == _MODE_TABLE_VAL:
             ks = fr[2]
-
-            # Use the explicit_map from the current stack frame (index 3)
-            # stack[-1] refers to the current inline table context.
             explicit_map = stack[-1][3]
-
-            if char in "[{":
+            if char == "[" or char == "{":
                 new_container = [] if char == "[" else {}
                 curr = cont
                 for i in range(len(ks) - 1):
                     k = ks[i]
-
-                    # Check if we are traversing through an explicitly defined key
                     if tuple(ks[:i + 1]) in explicit_map:
                         _fail(state, "Key conflict with %s" % k)
                         break
@@ -1026,25 +1068,21 @@ def _parse_complex_iterative(state):
                         new_tab = {}
                         curr[k] = new_tab
                         curr = new_tab
-                if _has_error(state):
-                    break
+                if state.error[0] != None:
+                    return res
                 lk = ks[-1]
                 if lk in curr:
                     _fail(state, "Duplicate key %s" % lk)
-                    break
-
-                # Mark this key path as explicitly defined in the current table
+                    return res
                 explicit_map[tuple(ks)] = True
-
                 curr[lk] = new_container
-
                 state.pos[0] += 1
-                stack.append([new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}])
+                stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
                 fr[1] = _MODE_TABLE_COMMA
             else:
                 val = _parse_val_nested(state)
-                if _has_error(state):
-                    break
+                if state.error[0] != None:
+                    return res
                 curr = cont
                 for i in range(len(ks) - 1):
                     k = ks[i]
@@ -1060,13 +1098,12 @@ def _parse_complex_iterative(state):
                         new_tab = {}
                         curr[k] = new_tab
                         curr = new_tab
-                if _has_error(state):
-                    break
+                if state.error[0] != None:
+                    return res
                 lk = ks[-1]
                 if lk in curr:
                     _fail(state, "Duplicate key %s" % lk)
-                    break
-
+                    return res
                 explicit_map[tuple(ks)] = True
                 curr[lk] = val
                 fr[1] = _MODE_TABLE_COMMA
@@ -1082,6 +1119,7 @@ def _parse_complex_iterative(state):
     return res
 
 def _parse_val_nested(state):
+    """Parses a value when nested inside a complex iterative structure."""
     pos = state.pos[0]
     data = state.data
     if data[pos] == '"' or data[pos] == "'":
@@ -1089,6 +1127,7 @@ def _parse_val_nested(state):
     return _parse_scalar(state)
 
 def _format_scalar_for_test(v):
+    """Formats a scalar value into the `toml-test` JSON compatible format."""
     t = type(v)
     if t == "bool":
         return {"type": "bool", "value": "true" if v else "false"}
@@ -1103,6 +1142,7 @@ def _format_scalar_for_test(v):
     return None
 
 def _expand_to_toml_test(raw, size_hint):
+    """Converts a standard Starlark structure into the `toml-test` format."""
     root = {} if type(raw) == "dict" else []
     stack = [[raw, root]]
     for _ in range(size_hint * 2 + 100):
@@ -1126,15 +1166,24 @@ def _expand_to_toml_test(raw, size_hint):
     return root
 
 def _parse_value(state):
+    """Delegates parsing to scalars, strings, or complex structures."""
     char = state.data[state.pos[0]]
     if char in "[{":
         return _parse_complex_iterative(state)
     if char in "\"'":
         return _parse_string(state)
     res = _parse_scalar(state)
-    if res == None and not _has_error(state):
+    if res == None and state.error[0] == None:
         _fail(state, "Value expected")
     return res
+
+def _is_globally_safe(data):
+    """Returns True if the document is pure safe ASCII (0-127).
+
+    This uses a single native lstrip pass. If the result is empty, the document
+    is guaranteed to contain only printable ASCII and safe whitespace (Tab/NL).
+    """
+    return not data.lstrip(_VALID_ASCII_CHARS)
 
 def decode(data, default = None, expand_values = False):
     """Decodes a TOML string into a Starlark structure.
@@ -1153,6 +1202,7 @@ def decode(data, default = None, expand_values = False):
     # significantly simplifies the rest of the parsing logic.
     data = data.replace("\r\n", "\n")
     state = _parser(data, default)
+    state.is_safe[0] = _is_globally_safe(data)
 
     # Process line by line (roughly)
     # The main loop needs to handle comments, empty lines, and table headers
@@ -1174,11 +1224,11 @@ def decode(data, default = None, expand_values = False):
 
         if char == "[":
             _parse_table(state)
-            if _has_error(state):
+            if state.error[0] != None:
                 break
         else:
             _parse_key_value(state, state.current_table[0])
-            if _has_error(state):
+            if state.error[0] != None:
                 break
 
         # Expect newline or EOF after a statement
@@ -1193,20 +1243,33 @@ def decode(data, default = None, expand_values = False):
                 _fail(state, "Expected newline or EOF")
                 break
 
-    if _has_error(state):
+    if state.error[0] != None:
         return default
 
     return _expand_to_toml_test(state.root, len(data)) if expand_values else state.root
 
 def _skip_ws_nl(state):
+    """Skips whitespace, comments, and newlines in the input stream."""
     data = state.data
     length = state.len
+
+    # FAST PATH: Single ws/nl
+    pos = state.pos[0]
+    if pos < length:
+        char = data[pos]
+        if char in " \t\n":
+            state.pos[0] = pos + 1
+            if pos + 1 < length:
+                nc = data[pos + 1]
+                if nc not in " \t\n#":
+                    return
+
     for _ in range(length):
         pos = state.pos[0]
         if pos >= length:
             break
         char = data[pos]
-        if char in " \t\n":
+        if char == " " or char == "\t" or char == "\n":
             state.pos[0] += 1
             continue
         if char == "#":
