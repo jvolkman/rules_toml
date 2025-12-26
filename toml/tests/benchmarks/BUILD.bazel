@@ -1,5 +1,6 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("//toml/tests/benchmarks:benchmark_test.bzl", "benchmark_test")
+load(":cargo_lock_prof.bzl", "benchmark_runner")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -35,8 +36,6 @@ bzl_library(
 benchmark_test(
     name = "cargo_lock_benchmark",
 )
-
-load(":cargo_lock_prof.bzl", "benchmark_runner")
 
 benchmark_runner(
     name = "benchmark_prof",
