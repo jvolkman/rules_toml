@@ -4,7 +4,7 @@ A pure Starlark TOML 1.1.0 encoder and decoder.
 
 ## Usage
 
-For full API documentation, see [the API Reference](docs/re.md).
+For full API documentation, see [the API Reference](docs/toml.md).
 
 ### In a `MODULE.bazel`
 
