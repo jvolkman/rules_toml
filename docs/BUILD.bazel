@@ -8,7 +8,7 @@ java_binary(
 )
 
 stardoc_with_diff_test(
-    name = "rules",
+    name = "toml",
     bzl_library_target = "@toml.bzl//:toml",
     renderer = ":renderer",
 )
