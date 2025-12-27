@@ -1,4 +1,4 @@
-load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_lib//:bzl_library.bzl", "bzl_library")
 load("//toml/tests/benchmarks:benchmark_test.bzl", "benchmark_test")
 load(":cargo_lock_prof.bzl", "benchmark_runner")
 
@@ -13,24 +13,8 @@ bzl_library(
     ],
 )
 
-bzl_library(
-    name = "benchmark_test_lib",
-    srcs = ["benchmark_test.bzl"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":benchmarks",
-        "@bazel_skylib//lib:unittest",
-    ],
-)
-
 benchmark_test(
     name = "benchmark_test",
-)
-
-bzl_library(
-    name = "cargo_lock_prof_lib",
-    srcs = ["cargo_lock_prof.bzl"],
-    deps = ["//toml"],
 )
 
 benchmark_test(

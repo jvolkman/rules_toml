@@ -1,7 +1,6 @@
 """Rule to download the TOML test suite and export its test cases."""
 
 load("@bazel_lib//lib:base64.bzl", "base64")
-load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "update_attrs")
 
 TOML_VERSION = "1.1.0"
@@ -34,8 +33,18 @@ def _test_suite_impl(rctx):
     valid_files = [test_dir.get_child(f) for f in test_file_names if f.startswith("valid/")]
     invalid_files = [test_dir.get_child(f) for f in test_file_names if f.startswith("invalid/")]
 
+    def _relativize(path, start):
+        path_str = str(path)
+        start_str = str(start)
+        if not path_str.startswith(start_str):
+            fail("Path {} is not under {}".format(path_str, start_str))
+        rel = path_str[len(start_str):]
+        if rel.startswith("/"):
+            rel = rel[1:]
+        return rel
+
     def test_name(path):
-        rel = paths.relativize(str(path), str(test_dir))
+        rel = _relativize(path, test_dir)
         rel = rel.replace(".toml", "")
         rel = rel.replace("/", "_")
         return rel

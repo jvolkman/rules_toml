@@ -1,11 +1,9 @@
 """Tests for the return_complex_types_as_string option in toml.decode."""
 
-load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("@rules_testing//lib:unit_test.bzl", "unit_test")
 load("//toml:toml.bzl", "decode")
 
-def _test_complex_string_impl(ctx):
-    env = unittest.begin(ctx)
-
+def _test_complex_string(env):
     toml_str = """
 dt = 1979-05-27T07:32:00Z
 dt_local = 1979-05-27T07:32:00
@@ -18,22 +16,21 @@ m_i = -inf
 
     # Test with flag enabled
     data = decode(toml_str, return_complex_types_as_string = True)
-    asserts.equals(env, "1979-05-27T07:32:00Z", data["dt"])
-    asserts.equals(env, "1979-05-27T07:32:00", data["dt_local"])
-    asserts.equals(env, "1979-05-27", data["d"])
-    asserts.equals(env, "07:32:00", data["t"])
-    asserts.equals(env, "nan", data["n"])
-    asserts.equals(env, "inf", data["i"])
-    asserts.equals(env, "-inf", data["m_i"])
+    env.expect.that_str(data["dt"]).equals("1979-05-27T07:32:00Z")
+    env.expect.that_str(data["dt_local"]).equals("1979-05-27T07:32:00")
+    env.expect.that_str(data["d"]).equals("1979-05-27")
+    env.expect.that_str(data["t"]).equals("07:32:00")
+    env.expect.that_str(data["n"]).equals("nan")
+    env.expect.that_str(data["i"]).equals("inf")
+    env.expect.that_str(data["m_i"]).equals("-inf")
 
     # Test with flag disabled (default)
     data_default = decode(toml_str)
-    asserts.equals(env, "datetime", data_default["dt"].toml_type)
-    asserts.equals(env, "float", data_default["n"].toml_type)
-
-    return unittest.end(env)
-
-complex_string_test = unittest.make(_test_complex_string_impl)
+    env.expect.that_str(data_default["dt"].toml_type).equals("datetime")
+    env.expect.that_str(data_default["n"].toml_type).equals("float")
 
 def complex_string_test_suite(name):
-    unittest.suite(name, complex_string_test)
+    unit_test(
+        name = name,
+        impl = _test_complex_string,
+    )

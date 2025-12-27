@@ -8,16 +8,17 @@ local_path_override(
     path = "..",
 )
 
-git_override(
-    module_name = "re.bzl",
-    commit = "31cad9bb065d924d5fa6a82af634de277e111d26",
-    remote = "https://github.com/jvolkman/re.bzl",
-)
-
 http_jar = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_jar")
 
 http_jar(
     name = "stardoc-prebuilt",
     integrity = "sha256-VQuahQMiQJDjsA+Bc44v48RYPG44qFavXvsvOcM4PyM=",
     urls = ["https://github.com/alexeagle/stardoc-prebuilt/releases/download/v0.8.0/renderer_deploy.jar"],
+)
+
+# TODO: Remove this when re.bzl is released in BCR.
+git_override(
+    module_name = "re.bzl",
+    commit = "e55da054760ebc09dbaec6ae9912d1ab80e4c0b9",
+    remote = "https://github.com/jvolkman/re.bzl",
 )

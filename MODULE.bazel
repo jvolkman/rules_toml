@@ -2,23 +2,16 @@
 
 module(
     name = "toml.bzl",
-    version = "0.0.1",
+    version = "0.1.0",
     compatibility_level = 1,
 )
 
-bazel_dep(name = "bazel_lib", version = "3.1.0")
-bazel_dep(name = "bazel_skylib", version = "1.8.1")
+bazel_dep(name = "bazel_lib", version = "3.0.0")
 bazel_dep(name = "re.bzl", version = "0.1.0")
 
 bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1", dev_dependency = True)
 bazel_dep(name = "rules_testing", version = "0.9.0", dev_dependency = True)
 bazel_dep(name = "bazelrc-preset.bzl", version = "1.8.0", dev_dependency = True)
-
-git_override(
-    module_name = "re.bzl",
-    commit = "31cad9bb065d924d5fa6a82af634de277e111d26",
-    remote = "https://github.com/jvolkman/re.bzl",
-)
 
 test_suite = use_repo_rule("//toml/tests:test_suite_repo.bzl", "test_suite")
 
@@ -26,4 +19,11 @@ test_suite(
     name = "toml_test_suite",
     integrity = "sha256-HqXrCuxACrraSFzbdQreUKfqWaKafbXiJs1Ebzdr9vk",
     url = "https://github.com/toml-lang/toml-test/archive/229ce2e7bb565d1704eac5f41e939870d4b1bce7.tar.gz",
+)
+
+# TODO: Remove this when re.bzl is released in BCR.
+git_override(
+    module_name = "re.bzl",
+    commit = "e55da054760ebc09dbaec6ae9912d1ab80e4c0b9",
+    remote = "https://github.com/jvolkman/re.bzl",
 )
