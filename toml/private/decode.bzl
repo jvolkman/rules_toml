@@ -7,24 +7,33 @@ _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678
 _VALID_ASCII_CHARS = "\n\t !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 # --- Regex Patterns for Scalars ---
-_PATTERN_BOOLEAN = r"true|false"
-_PATTERN_INF_NAN = r"[+-]?(?:inf|nan)"
-_PATTERN_HEX = r"0x[0-9a-fA-F_]+"
-_PATTERN_OCT = r"0o[0-7_]+"
-_PATTERN_BIN = r"0b[01_]+"
-_PATTERN_DATETIME = r"(?P<dt_year>\d{4})-(?P<dt_month>\d{2})-(?P<dt_day>\d{2})(?:(?P<dt_tsep>[Tt ])(?P<dt_hour>\d{2}):(?P<dt_minute>\d{2})(?::(?P<dt_second>\d{2})(?:\.(?P<dt_frac>\d+))?)?)?(?P<dt_offset>[Zz]|[+-]\d{2}:\d{2})?"
-_PATTERN_TIME = r"(?P<tm_hour>\d{2}):(?P<tm_minute>\d{2})(?::(?P<tm_second>\d{2})(?:\.(?P<tm_frac>\d+))?)?"
-_PATTERN_FLOAT = r"[+-]?(?:0|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*))?(?:[eE][+-]?(?:\d(?:_?\d)*))?"
-
 _RE_SCALAR = re.compile(
-    "(?P<boolean>" + _PATTERN_BOOLEAN + ")|" +
-    "(?P<inf_nan>" + _PATTERN_INF_NAN + ")|" +
-    "(?P<hex>" + _PATTERN_HEX + ")|" +
-    "(?P<oct>" + _PATTERN_OCT + ")|" +
-    "(?P<bin>" + _PATTERN_BIN + ")|" +
-    "(?P<datetime>" + _PATTERN_DATETIME + ")|" +
-    "(?P<time>" + _PATTERN_TIME + ")|" +
-    "(?P<number>" + _PATTERN_FLOAT + ")",
+    r"""
+    (?P<datetime>
+        (?P<dt_year>\d{4})-(?P<dt_month>\d{2})-(?P<dt_day>\d{2})  # Date
+        (?:
+            (?P<dt_tsep>[Tt ])                                    # Separator
+            (?P<dt_hour>\d{2}):(?P<dt_minute>\d{2})               # Time
+            (?::(?P<dt_second>\d{2})(?:\.(?P<dt_frac>\d+))?)?     # Optional seconds/frac
+        )?
+        (?P<dt_offset>[Zz]|[+-]\d{2}:\d{2})?                      # Optional offset
+    )|
+    (?P<time>
+        (?P<tm_hour>\d{2}):(?P<tm_minute>\d{2})                   # Time
+        (?::(?P<tm_second>\d{2})(?:\.(?P<tm_frac>\d+))?)?         # Optional seconds/frac
+    )|
+    (?P<hex>0x[0-9a-fA-F_]+)|
+    (?P<oct>0o[0-7_]+)|
+    (?P<bin>0b[01_]+)|
+    (?P<boolean>true|false)|
+    (?P<inf_nan>[+-]?(?:inf|nan))|
+    (?P<number>
+        [+-]?(?:0|[1-9](?:_?\d)*)         # Integer part
+        (?:\.(?:\d(?:_?\d)*))?            # Optional fraction
+        (?:[eE][+-]?(?:\d(?:_?\d)*))?     # Optional exponent
+    )
+    """,
+    re.VERBOSE,
 )
 
 _MAX_ITERATIONS_MULTIPLIER = 5
