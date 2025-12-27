@@ -12,7 +12,7 @@ bazel_dep(name = "toml.bzl", version = "0.0.1")
 git_override(
     module_name = "toml.bzl",
     remote = "https://github.com/jvolkman/toml.bzl.git",
-    tag = "0.0.1",
+    commit = "fb2164e313cf610bd768ee0085437ed3374c9390",
 )
 ```
 
