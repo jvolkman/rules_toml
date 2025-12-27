@@ -1,32 +1,19 @@
-"""TOML decoder implementation for Starlark.
+"""TOML decoder implementation for Starlark."""
 
-This module provides functions for parsing TOML documents into Starlark structures.
-It is optimized for performance in the Starlark interpreter via several key strategies:
-
-1. Performance Considerations:
-   - Windowed String Operations: To avoid O(N) string slicing costs (which are
-     inherent in Java-based Starlark strings), this parser uses small fixed-size
-     windows (e.g., 64 bytes) for searches and `lstrip` calls. This prevents
-     pathological O(N^2) behavior on large documents.
-   - Iterative Design: Since Starlark disallows recursion, the parser is
-     implemented iteratively with a manual stack. This also helps reduce
-     function call overhead in hot loops.
-   - Global Document Safety: An initial O(N) pass checks if the entire document is
-     pure printable ASCII. If so, robust UTF-8 and control character validation
-     is skipped, providing a significant speedup for common TOML files.
-   - Operator Efficiency: Prefer built-in operators (e.g., `list += [item]`) over
-     method calls (e.g., `list.append(item)`) as they are significantly faster
-     in the Starlark interpreter.
-"""
+load("@re.bzl", "re")
 
 # --- Constants for Tokenization ---
-_DIGITS = "0123456789_"
 _HEX_DIGITS = "0123456789abcdefABCDEF_"
 _OCT_DIGITS = "01234567_"
 _BIN_DIGITS = "01_"
 
 _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 _VALID_ASCII_CHARS = "\n\t !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+
+# --- Regex Patterns for Scalars ---
+_RE_DATETIME = re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?:(?P<tsep>[Tt ])(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2})(?:\.(?P<frac>\d+))?)?)?(?P<offset>[Zz]|[+-]\d{2}:\d{2})?")
+_RE_TIME = re.compile(r"(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2})(?:\.(?P<frac>\d+))?)?")
+_RE_FLOAT = re.compile(r"[+-]?(?:0|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*))?(?:[eE][+-]?(?:\d(?:_?\d)*))?")
 
 _MAX_ITERATIONS_MULTIPLIER = 5
 _REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
@@ -131,8 +118,6 @@ def _validate_text(state, text, context, allow_nl = False):
             return False
         return True
 
-    # Check for bare CR if allow_nl is False, or other simple constraints.
-
     # FAST PATH: Check if string is pure valid ASCII
     # We include NL in common set as it's very common and safe to check once up front.
     if not text.lstrip(_VALID_ASCII_CHARS):
@@ -192,6 +177,11 @@ def _to_hex(val, width):
     """Formats an integer as a zero-padded hexadecimal string."""
     s = "%x" % val
     return ("0" * (width - len(s))) + s if len(s) < width else s
+
+def _pad_02(val):
+    """Formats an integer as a 2-digit zero-padded string."""
+    s = "%d" % val
+    return "0" + s if len(s) < 2 else s
 
 def _codepoint_to_string(code):
     """Converts a Unicode codepoint to a Starlark string."""
@@ -699,37 +689,6 @@ def _parse_key_value(state, target):
     current[last_key] = value
     state.path_types[last_path_tuple] = "inline" if type(value) == "dict" else ("array" if type(value) == "list" else "scalar")
 
-def _parse_time_manual(state):
-    """Manually parses a TOML time string (HH:MM:SS.ffffff) from the input."""
-    pos = state.pos[0]
-    data = state.data
-    length = state.len
-    if pos + 5 > length or not (data[pos].isdigit() and data[pos + 1].isdigit() and data[pos + 2] == ":" and data[pos + 3].isdigit() and data[pos + 4].isdigit()):
-        return None
-    timestr = data[pos:pos + 5]
-    pos += 5
-    if pos + 3 <= length and data[pos] == ":" and data[pos + 1].isdigit() and data[pos + 2].isdigit():
-        timestr += data[pos:pos + 3]
-        pos += 3
-        if pos < length and data[pos] == ".":
-            dp = pos
-            pos += 1
-
-            # Consume fractional digits
-            rest = data[pos:]
-            stripped = rest.lstrip("0123456789")
-            consumed = len(rest) - len(stripped)
-
-            if consumed == 0:
-                _fail(state, "Fractional part must have digits")
-                return None
-
-            pos += consumed
-            timestr += data[dp:pos]
-    else:
-        timestr += ":00"
-    return timestr, pos - state.pos[0]
-
 def _parse_scalar(state):
     """Parses simple scalar values like numbers, booleans, and dates."""
     pos = state.pos[0]
@@ -775,17 +734,11 @@ def _parse_scalar(state):
     char = data[pos]
 
     # Hex/Oct/Bin
-    # Hex/Oct/Bin
     if char == "0" and pos + 1 < length:
         next_char = data[pos + 1]
         if next_char == "x":
             # Hex
-            # consume until non-hex
-            # valid hex: 0-9 a-f A-F _
-            # rough scan
-            # Optimization: slice a window to avoid huge copy
             window = data[pos:min(length, pos + 64)]
-
             tail = window[2:].lstrip(_HEX_DIGITS)
             match_len = len(window) - len(tail)
             val = data[pos:pos + match_len]
@@ -822,181 +775,121 @@ def _parse_scalar(state):
     # Dates start with digit.
     # Numbers start with digit or +/-.
     if char.isdigit() or char == "+" or char == "-":
-        # Check for date: YYYY-MM-DD
-        # Minimal check: \d{4}-
+        # Regex-based dispatch for dates and numbers
+        # Date/DateTime
+        m = _RE_DATETIME.match(data, pos)
+        if m:
+            val_str = m.group(0)
+            state.pos[0] += len(val_str)
 
-        # We peek 5 chars for date/time signature
-        signature = data[pos:min(length, pos + 5)]
-        is_date = False
-        if len(signature) == 5 and signature[4] == "-" and signature[0].isdigit() and signature[1].isdigit() and signature[2].isdigit() and signature[3].isdigit():
-            is_date = True
+            year = int(m.group("year"))
+            month = int(m.group("month"))
+            day = int(m.group("day"))
 
-        if is_date:
-            # Extract date string YYYY-MM-DD
-            date_str = data[pos:pos + 10]
-            if len(date_str) == 10 and date_str[4] == "-" and date_str[7] == "-" and date_str[:4].isdigit() and date_str[5:7].isdigit() and date_str[8:].isdigit():
-                if not _validate_date(state, int(date_str[0:4]), int(date_str[5:7]), int(date_str[8:10])):
-                    return None
-                state.pos[0] += 10
-
-                # Check for Time and Offset
-                if state.pos[0] < length and data[state.pos[0]] in "Tt ":
-                    separator = data[state.pos[0]]
-                    state.pos[0] += 1
-                    time_result = _parse_time_manual(state)
-                    if time_result:
-                        time_str, time_len = time_result
-                        state.pos[0] += time_len
-
-                        # Offset ...
-                        # Reuse the logic from the old function?
-                        # The old function had heavy nesting.
-                        # Simplified:
-                        if not _validate_time(state, int(time_str[0:2]), int(time_str[3:5]), int(time_str[6:8])):
-                            return None
-
-                        value_str = date_str + separator + time_str
-                        if state.pos[0] < length:
-                            if data[state.pos[0]] in "Zz":
-                                state.pos[0] += 1
-                                if state.return_complex_types_as_string:
-                                    return (value_str + "Z")
-                                return struct(toml_type = "datetime", value = (value_str + "Z").replace(" ", "T").replace("t", "T"))
-                            if data[state.pos[0]] in "+-":
-                                offset_str = data[state.pos[0]:state.pos[0] + 6]
-                                if (len(offset_str) == 6 and offset_str[0] in "+-" and offset_str[1].isdigit() and offset_str[2].isdigit() and offset_str[3] == ":" and offset_str[4].isdigit() and offset_str[5].isdigit()):
-                                    offset_hours = int(offset_str[1:3])
-                                    offset_minutes = int(offset_str[4:6])
-                                    if not _validate_offset(state, offset_hours, offset_minutes):
-                                        return None
-                                    state.pos[0] += 6
-                                    if state.return_complex_types_as_string:
-                                        return (value_str + offset_str)
-                                    return struct(toml_type = "datetime", value = (value_str + offset_str).replace(" ", "T").replace("t", "T"))
-                        if state.return_complex_types_as_string:
-                            return value_str
-                        return struct(toml_type = "datetime-local", value = value_str.replace(" ", "T").replace("t", "T"))
-                    else:
-                        state.pos[0] -= 1
-                if state.return_complex_types_as_string:
-                    return date_str
-                return struct(toml_type = "date-local", value = date_str)
-
-        # Time check
-        if len(signature) >= 3 and signature[2] == ":":
-            # Likely time "HH:MM"
-            # 01234567
-            # HH:MM:SS
-            # HH:MM:SS.ffffff
-
-            # Let's rely on _parse_time_manual logic but we need to invoke it.
-            # Note: _parse_time_manual increments state.pos!
-            # We should reset if it fails?
-
-            old_pos = state.pos[0]
-            time_result = _parse_time_manual(state)
-            if time_result:
-                time_str, time_len = time_result
-                state.pos[0] = old_pos + time_len
-                if not _validate_time(state, int(time_str[0:2]), int(time_str[3:5]), int(time_str[6:8])):
-                    return None
-                if state.return_complex_types_as_string:
-                    return time_str
-                return struct(toml_type = "time-local", value = time_str)
-            state.pos[0] = old_pos
-
-        # Number (Int or Float)
-        # We must scan strictly to avoid consuming invalid sequences like "1e2.3" as a single chunk
-
-        # 1. Integer part
-        num_len = 0
-        if data[pos] in "+-":
-            num_len += 1
-
-        # Consume integer digits
-        # We use lstrip on a window from current pos
-        w_start = pos + num_len
-        if w_start < length:
-            window = data[w_start:min(length, w_start + 64)]
-            tail = window.lstrip(_DIGITS)
-
-            # Digits consumed
-            digits_len = len(window) - len(tail)
-            num_len += digits_len
-
-        # Check for fractional part
-        is_float = False
-        if pos + num_len < length and data[pos + num_len] == ".":
-            # We must strict check: TOML requires digits after dot
-            if pos + num_len + 1 < length and data[pos + num_len + 1].isdigit():
-                is_float = True
-                num_len += 1  # Consume '.'
-
-                w_start = pos + num_len
-                window = data[w_start:min(length, w_start + 64)]
-                tail = window.lstrip(_DIGITS)
-                frac_len = len(window) - len(tail)
-                num_len += frac_len
-
-        # Check for exponent
-        # Check for exponent
-        if pos + num_len < length and data[pos + num_len] in "eE":
-            # We must check for optional sign then digits
-            exp_len = 1
-            idx = pos + num_len + 1
-            if idx < length and data[idx] in "+-":
-                exp_len += 1
-                idx += 1
-
-            # Check for digits
-            if idx < length and data[idx].isdigit():
-                is_float = True
-                num_len += exp_len
-
-                w_start = idx
-                window = data[w_start:min(length, w_start + 64)]
-                tail = window.lstrip(_DIGITS)
-                exp_digits_len = len(window) - len(tail)
-                num_len += exp_digits_len
-
-        # Now we have the strictly scanned number string.
-        val = data[pos:pos + num_len]
-
-        # Sanity check: if we just matched a sign "+", that's not a number.
-        if num_len == 0 or (num_len == 1 and val in "+-"):
-            return None
-
-        # Validate underscores and leading zeros
-        check_val = val
-        if check_val[0] in "+-":
-            check_val = check_val[1:]
-
-        if not check_val:
-            return None
-
-        if check_val[0] == "_" or check_val[-1] == "_" or "__" in check_val:
-            return None  # Invalid structure
-
-        # Validate integer start (must be digit, cannot be '.' or 'e')
-        if not check_val[0].isdigit():
-            return None
-
-        # Leading zero check
-        # If starts with 0, must be single "0" or followed by "." or "e/E".
-        # "01" -> invalid. "0_1" -> invalid.
-        if len(check_val) > 1 and check_val[0] == "0" and check_val[1] not in ".eE":
-            return None
-
-        if is_float:
-            # Additional float validation
-            if "_." in val or "._" in val or "_e" in val or "e_" in val or "_E" in val or "E_" in val:
+            if not _validate_date(state, year, month, day):
+                _fail(state, "Invalid date: " + val_str)
                 return None
 
-            state.pos[0] += num_len
-            return float(val.replace("_", ""))
-        else:
-            state.pos[0] += num_len
-            return int(val.replace("_", ""))
+            hour_str = m.group("hour")
+            if hour_str != None:
+                # Full DateTime
+                hour = int(hour_str)
+                minute = int(m.group("minute"))
+                sec_str = m.group("second")
+                second = int(sec_str) if sec_str != None else 0
+
+                if not _validate_time(state, hour, minute, second):
+                    _fail(state, "Invalid time in datetime: " + val_str)
+                    return None
+
+                # Construct standardized string
+                tsep = m.group("tsep")
+                t_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+                frac = m.group("frac")
+                if frac != None:
+                    t_str += "." + frac
+
+                off_str = m.group("offset")
+                if off_str != None:
+                    if off_str in ["Z", "z"]:
+                        off_str = "Z"
+                    else:
+                        oh = int(off_str[1:3])
+                        om = int(off_str[4:6])
+                        if not _validate_offset(state, oh, om):
+                            _fail(state, "Invalid offset: " + off_str)
+                            return None
+
+                    if state.return_complex_types_as_string:
+                        return (val_str[:10] + tsep + t_str + off_str)
+                    return struct(toml_type = "datetime", value = (val_str[:10] + "T" + t_str + off_str))
+
+                # Local Datetime
+                if state.return_complex_types_as_string:
+                    return (val_str[:10] + tsep + t_str)
+                return struct(toml_type = "datetime-local", value = (val_str[:10] + "T" + t_str))
+
+            # Local Date
+            if state.return_complex_types_as_string:
+                return val_str
+            return struct(toml_type = "date-local", value = val_str)
+
+        # Local Time
+        m = _RE_TIME.match(data, pos)
+        if m:
+            val_str = m.group(0)
+            state.pos[0] += len(val_str)
+
+            hour = int(m.group("hour"))
+            minute = int(m.group("minute"))
+            sec_str = m.group("second")
+            second = int(sec_str) if sec_str != None else 0
+
+            if not _validate_time(state, hour, minute, second):
+                _fail(state, "Invalid time: " + val_str)
+                return None
+
+            # Standardize string (ensure :00 if missing)
+            res_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+            frac = m.group("frac")
+            if frac != None:
+                res_str += "." + frac
+
+            if state.return_complex_types_as_string:
+                return res_str
+            return struct(toml_type = "time-local", value = res_str)
+
+        # Numbers (Float includes Integer in our regex matches)
+        m = _RE_FLOAT.match(data, pos)
+        if m:
+            val_str = m.group(0)
+            is_float = "." in val_str or "e" in val_str or "E" in val_str
+
+            # Leading zero check for integers
+            if not is_float:
+                check_str = val_str
+                if check_str.startswith("+") or check_str.startswith("-"):
+                    check_str = check_str[1:]
+                if len(check_str) > 1 and check_str[0] == "0":
+                    _fail(state, "Leading zero not allowed in integer: " + val_str)
+                    return None
+
+                # Check for trailing junk that regex might have missed (like another digit after 0)
+                if check_str == "0" and pos + len(val_str) < state.len and state.data[pos + len(val_str)].isdigit():
+                    _fail(state, "Invalid integer suffix: " + val_str)
+                    return None
+
+            # Float-specific underscore validation
+            if is_float and ("_." in val_str or "._" in val_str or "_e" in val_str or "e_" in val_str or "_E" in val_str or "E_" in val_str):
+                _fail(state, "Invalid underscore in float: " + val_str)
+                return None
+
+            state.pos[0] += len(val_str)
+            val_clean = val_str.replace("_", "")
+            if is_float:
+                return float(val_clean)
+            else:
+                return int(val_clean)
 
     return None
 
