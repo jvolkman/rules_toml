@@ -3,17 +3,29 @@
 load("@re.bzl", "re")
 
 # --- Constants for Tokenization ---
-_HEX_DIGITS = "0123456789abcdefABCDEF_"
-_OCT_DIGITS = "01234567_"
-_BIN_DIGITS = "01_"
-
 _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 _VALID_ASCII_CHARS = "\n\t !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 # --- Regex Patterns for Scalars ---
-_RE_DATETIME = re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?:(?P<tsep>[Tt ])(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2})(?:\.(?P<frac>\d+))?)?)?(?P<offset>[Zz]|[+-]\d{2}:\d{2})?")
-_RE_TIME = re.compile(r"(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2})(?:\.(?P<frac>\d+))?)?")
-_RE_FLOAT = re.compile(r"[+-]?(?:0|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*))?(?:[eE][+-]?(?:\d(?:_?\d)*))?")
+_PATTERN_BOOLEAN = r"true|false"
+_PATTERN_INF_NAN = r"[+-]?(?:inf|nan)"
+_PATTERN_HEX = r"0x[0-9a-fA-F_]+"
+_PATTERN_OCT = r"0o[0-7_]+"
+_PATTERN_BIN = r"0b[01_]+"
+_PATTERN_DATETIME = r"(?P<dt_year>\d{4})-(?P<dt_month>\d{2})-(?P<dt_day>\d{2})(?:(?P<dt_tsep>[Tt ])(?P<dt_hour>\d{2}):(?P<dt_minute>\d{2})(?::(?P<dt_second>\d{2})(?:\.(?P<dt_frac>\d+))?)?)?(?P<dt_offset>[Zz]|[+-]\d{2}:\d{2})?"
+_PATTERN_TIME = r"(?P<tm_hour>\d{2}):(?P<tm_minute>\d{2})(?::(?P<tm_second>\d{2})(?:\.(?P<tm_frac>\d+))?)?"
+_PATTERN_FLOAT = r"[+-]?(?:0|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*))?(?:[eE][+-]?(?:\d(?:_?\d)*))?"
+
+_RE_SCALAR = re.compile(
+    "(?P<boolean>" + _PATTERN_BOOLEAN + ")|" +
+    "(?P<inf_nan>" + _PATTERN_INF_NAN + ")|" +
+    "(?P<hex>" + _PATTERN_HEX + ")|" +
+    "(?P<oct>" + _PATTERN_OCT + ")|" +
+    "(?P<bin>" + _PATTERN_BIN + ")|" +
+    "(?P<datetime>" + _PATTERN_DATETIME + ")|" +
+    "(?P<time>" + _PATTERN_TIME + ")|" +
+    "(?P<number>" + _PATTERN_FLOAT + ")",
+)
 
 _MAX_ITERATIONS_MULTIPLIER = 5
 _REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
@@ -693,176 +705,13 @@ def _parse_scalar(state):
     """Parses simple scalar values like numbers, booleans, and dates."""
     pos = state.pos[0]
     data = state.data
-    length = state.len
 
-    # Fast-path Booleans
-    if data[pos:pos + 4] == "true":
-        state.pos[0] += 4
-        return True
-    if data[pos:pos + 5] == "false":
-        state.pos[0] += 5
-        return False
+    m = _RE_SCALAR.match(data, pos)
+    if m:
+        val_str = m.group(0)
+        groups = m.groupdict()
 
-    # Fast-path Inf/NaN
-    char = data[pos]
-    if char == "n":
-        if data[pos:pos + 3] == "nan":
-            state.pos[0] += 3
-            if state.return_complex_types_as_string:
-                return "nan"
-            return struct(toml_type = "float", value = "nan")
-    elif char == "i":
-        if data[pos:pos + 3] == "inf":
-            state.pos[0] += 3
-            if state.return_complex_types_as_string:
-                return "inf"
-            return struct(toml_type = "float", value = "inf")
-    elif char == "+" or char == "-":
-        if data[pos + 1:pos + 4] == "nan":
-            state.pos[0] += 4
-            if state.return_complex_types_as_string:
-                return "nan"
-            return struct(toml_type = "float", value = "nan")
-        if data[pos + 1:pos + 4] == "inf":
-            state.pos[0] += 4
-            val = "-inf" if char == "-" else "inf"
-            if state.return_complex_types_as_string:
-                return val
-            return struct(toml_type = "float", value = val)
-
-    # Manual dispatch for scalars
-    char = data[pos]
-
-    # Hex/Oct/Bin
-    if char == "0" and pos + 1 < length:
-        next_char = data[pos + 1]
-        if next_char == "x":
-            # Hex
-            window = data[pos:min(length, pos + 64)]
-            tail = window[2:].lstrip(_HEX_DIGITS)
-            match_len = len(window) - len(tail)
-            val = data[pos:pos + match_len]
-            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
-                return None
-            if len(val) > 2 and val[2] == "_":
-                return None
-            state.pos[0] += match_len
-            return int(val.replace("_", ""), 16)
-        elif next_char == "o":
-            window = data[pos:min(length, pos + 64)]
-            tail = window[2:].lstrip(_OCT_DIGITS)
-            match_len = len(window) - len(tail)
-            val = data[pos:pos + match_len]
-            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
-                return None
-            if len(val) > 2 and val[2] == "_":
-                return None
-            state.pos[0] += match_len
-            return int(val.replace("_", ""), 8)
-        elif next_char == "b":
-            window = data[pos:min(length, pos + 64)]
-            tail = window[2:].lstrip(_BIN_DIGITS)
-            match_len = len(window) - len(tail)
-            val = data[pos:pos + match_len]
-            if not val or val[-1] == "_" or ("_" not in val and match_len == 2):
-                return None
-            if len(val) > 2 and val[2] == "_":
-                return None
-            state.pos[0] += match_len
-            return int(val.replace("_", ""), 2)
-
-    # Date vs Number
-    # Dates start with digit.
-    # Numbers start with digit or +/-.
-    if char.isdigit() or char == "+" or char == "-":
-        # Regex-based dispatch for dates and numbers
-        # Date/DateTime
-        m = _RE_DATETIME.match(data, pos)
-        if m:
-            val_str = m.group(0)
-            state.pos[0] += len(val_str)
-
-            year = int(m.group("year"))
-            month = int(m.group("month"))
-            day = int(m.group("day"))
-
-            if not _validate_date(state, year, month, day):
-                _fail(state, "Invalid date: " + val_str)
-                return None
-
-            hour_str = m.group("hour")
-            if hour_str != None:
-                # Full DateTime
-                hour = int(hour_str)
-                minute = int(m.group("minute"))
-                sec_str = m.group("second")
-                second = int(sec_str) if sec_str != None else 0
-
-                if not _validate_time(state, hour, minute, second):
-                    _fail(state, "Invalid time in datetime: " + val_str)
-                    return None
-
-                # Construct standardized string
-                tsep = m.group("tsep")
-                t_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
-                frac = m.group("frac")
-                if frac != None:
-                    t_str += "." + frac
-
-                off_str = m.group("offset")
-                if off_str != None:
-                    if off_str in ["Z", "z"]:
-                        off_str = "Z"
-                    else:
-                        oh = int(off_str[1:3])
-                        om = int(off_str[4:6])
-                        if not _validate_offset(state, oh, om):
-                            _fail(state, "Invalid offset: " + off_str)
-                            return None
-
-                    if state.return_complex_types_as_string:
-                        return (val_str[:10] + tsep + t_str + off_str)
-                    return struct(toml_type = "datetime", value = (val_str[:10] + "T" + t_str + off_str))
-
-                # Local Datetime
-                if state.return_complex_types_as_string:
-                    return (val_str[:10] + tsep + t_str)
-                return struct(toml_type = "datetime-local", value = (val_str[:10] + "T" + t_str))
-
-            # Local Date
-            if state.return_complex_types_as_string:
-                return val_str
-            return struct(toml_type = "date-local", value = val_str)
-
-        # Local Time
-        m = _RE_TIME.match(data, pos)
-        if m:
-            val_str = m.group(0)
-            state.pos[0] += len(val_str)
-
-            hour = int(m.group("hour"))
-            minute = int(m.group("minute"))
-            sec_str = m.group("second")
-            second = int(sec_str) if sec_str != None else 0
-
-            if not _validate_time(state, hour, minute, second):
-                _fail(state, "Invalid time: " + val_str)
-                return None
-
-            # Standardize string (ensure :00 if missing)
-            res_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
-            frac = m.group("frac")
-            if frac != None:
-                res_str += "." + frac
-
-            if state.return_complex_types_as_string:
-                return res_str
-            return struct(toml_type = "time-local", value = res_str)
-
-        # Numbers (Float includes Integer in our regex matches)
-        m = _RE_FLOAT.match(data, pos)
-        if m:
-            val_str = m.group(0)
+        if groups["number"]:
             is_float = "." in val_str or "e" in val_str or "E" in val_str
 
             # Leading zero check for integers
@@ -883,7 +732,6 @@ def _parse_scalar(state):
             if is_float and ("_." in val_str or "._" in val_str or "_e" in val_str or "e_" in val_str or "_E" in val_str or "E_" in val_str):
                 _fail(state, "Invalid underscore in float: " + val_str)
                 return None
-
             state.pos[0] += len(val_str)
             val_clean = val_str.replace("_", "")
             if is_float:
@@ -891,6 +739,118 @@ def _parse_scalar(state):
             else:
                 return int(val_clean)
 
+        elif groups["boolean"]:
+            state.pos[0] += len(val_str)
+            return val_str == "true"
+
+        elif groups["datetime"]:
+            state.pos[0] += len(val_str)
+            year = int(groups["dt_year"])
+            month = int(groups["dt_month"])
+            day = int(groups["dt_day"])
+            if not _validate_date(state, year, month, day):
+                _fail(state, "Invalid date: " + val_str)
+                return None
+            hour_str = groups["dt_hour"]
+            if hour_str != None:
+                # Full DateTime
+                hour = int(hour_str)
+                minute = int(groups["dt_minute"])
+                sec_str = groups["dt_second"]
+                second = int(sec_str) if sec_str != None else 0
+                if not _validate_time(state, hour, minute, second):
+                    _fail(state, "Invalid time in datetime: " + val_str)
+                    return None
+
+                # Construct standardized string
+                tsep = groups["dt_tsep"]
+                t_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+                frac = groups["dt_frac"]
+                if frac != None:
+                    t_str += "." + frac
+                off_str = groups["dt_offset"]
+                if off_str != None:
+                    if off_str in ["Z", "z"]:
+                        off_str = "Z"
+                    else:
+                        oh = int(off_str[1:3])
+                        om = int(off_str[4:6])
+                        if not _validate_offset(state, oh, om):
+                            _fail(state, "Invalid offset: " + off_str)
+                            return None
+                    if state.return_complex_types_as_string:
+                        return (val_str[:10] + tsep + t_str + off_str)
+                    return struct(toml_type = "datetime", value = (val_str[:10] + "T" + t_str + off_str))
+
+                # Local Datetime
+                if state.return_complex_types_as_string:
+                    return (val_str[:10] + tsep + t_str)
+                return struct(toml_type = "datetime-local", value = (val_str[:10] + "T" + t_str))
+
+            # Local Date
+            if state.return_complex_types_as_string:
+                return val_str
+            return struct(toml_type = "date-local", value = val_str)
+
+        elif groups["time"]:
+            state.pos[0] += len(val_str)
+            hour = int(groups["tm_hour"])
+            minute = int(groups["tm_minute"])
+            sec_str = groups["tm_second"]
+            second = int(sec_str) if sec_str != None else 0
+            if not _validate_time(state, hour, minute, second):
+                _fail(state, "Invalid time: " + val_str)
+                return None
+
+            # Standardize string (ensure :00 if missing)
+            res_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+            frac = groups["tm_frac"]
+            if frac != None:
+                res_str += "." + frac
+            if state.return_complex_types_as_string:
+                return res_str
+            return struct(toml_type = "time-local", value = res_str)
+
+        elif groups["hex"]:
+            val = val_str[2:]
+            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
+                return None
+            state.pos[0] += len(val_str)
+            return int(val.replace("_", ""), 16)
+
+        elif groups["oct"]:
+            val = val_str[2:]
+            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
+                return None
+            state.pos[0] += len(val_str)
+            return int(val.replace("_", ""), 8)
+
+        elif groups["bin"]:
+            val = val_str[2:]
+            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
+                return None
+            state.pos[0] += len(val_str)
+            return int(val.replace("_", ""), 2)
+
+        elif groups["inf_nan"]:
+            state.pos[0] += len(val_str)
+
+            # Normalize inf/nan string
+            lower_val = val_str.lower()
+            if "nan" in lower_val:
+                if state.return_complex_types_as_string:
+                    return "nan"
+                return struct(toml_type = "float", value = "nan")
+            else:
+                # inf or -inf or +inf
+                val = "inf"
+                if "-" in val_str:
+                    val = "-inf"
+                if state.return_complex_types_as_string:
+                    return val
+                return struct(toml_type = "float", value = val)
+
+    _fail(state, "Invalid scalar value")
     return None
 
 _MODE_ARRAY_VAL = 1
