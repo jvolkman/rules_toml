@@ -10,10 +10,3 @@ local_path_override(
     module_name = "toml.bzl",
     path = "../..",
 )
-
-# TODO: Remove this when re.bzl is released in BCR.
-git_override(
-    module_name = "re.bzl",
-    commit = "bb9d4f96b095fea9acee37c5ce4d4e4d5f88dbf2",
-    remote = "https://github.com/jvolkman/re.bzl",
-)

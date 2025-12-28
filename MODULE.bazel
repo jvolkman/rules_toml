@@ -20,10 +20,3 @@ test_suite(
     integrity = "sha256-HqXrCuxACrraSFzbdQreUKfqWaKafbXiJs1Ebzdr9vk",
     url = "https://github.com/toml-lang/toml-test/archive/229ce2e7bb565d1704eac5f41e939870d4b1bce7.tar.gz",
 )
-
-# TODO: Remove this when re.bzl is released in BCR.
-git_override(
-    module_name = "re.bzl",
-    commit = "bb9d4f96b095fea9acee37c5ce4d4e4d5f88dbf2",
-    remote = "https://github.com/jvolkman/re.bzl",
-)

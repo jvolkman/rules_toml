@@ -17,10 +17,3 @@ http_jar(
     integrity = "sha256-VQuahQMiQJDjsA+Bc44v48RYPG44qFavXvsvOcM4PyM=",
     urls = ["https://github.com/alexeagle/stardoc-prebuilt/releases/download/v0.8.0/renderer_deploy.jar"],
 )
-
-# TODO: Remove this when re.bzl is released in BCR.
-git_override(
-    module_name = "re.bzl",
-    commit = "bb9d4f96b095fea9acee37c5ce4d4e4d5f88dbf2",
-    remote = "https://github.com/jvolkman/re.bzl",
-)
