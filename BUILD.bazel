@@ -1,4 +1,7 @@
+"""Build rules for toml.bzl."""
+
 load("@bazel_lib//:bzl_library.bzl", "bzl_library")
+load("@package_metadata//rules:package_metadata.bzl", "package_metadata")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,4 +9,13 @@ bzl_library(
     name = "toml",
     srcs = ["toml.bzl"],
     deps = ["//toml"],
+)
+
+package_metadata(
+    name = "package_metadata",
+    purl = "pkg:bazel/{}@{}".format(
+        module_name(),
+        module_version(),
+    ),
+    visibility = ["//visibility:public"],
 )

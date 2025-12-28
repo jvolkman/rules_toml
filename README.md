@@ -46,10 +46,10 @@ print(encoded)
 
 Tested on an **Apple M3 MacBook Pro**:
 
-| Document Type | Size | Time | Performance |
-| :--- | :--- | :--- | :--- |
-| **Cargo.lock** | 1.5 MB | **180 ms** | ~8 MB/s |
-| **Scalar Parsing** | - | - | ~35,000 items/s |
+| Document Type      | Size   | Time       | Performance     |
+| :----------------- | :----- | :--------- | :-------------- |
+| **Cargo.lock**     | 1.5 MB | **180 ms** | ~8 MB/s         |
+| **Scalar Parsing** | -      | -          | ~35,000 items/s |
 
 ### Compliance
 

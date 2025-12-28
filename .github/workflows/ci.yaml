@@ -1,5 +1,4 @@
 name: CI
-
 # Controls when the action will run.
 on:
   # Triggers the workflow on push or pull request events but only for the main branch
@@ -9,26 +8,49 @@ on:
     branches: [main]
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-
 concurrency:
-  # Cancel previous actions from the same PR: https://stackoverflow.com/a/72408109
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+  # Cancel previous actions from the same PR or branch except 'main' branch.
+  # See https://docs.github.com/en/actions/using-jobs/using-concurrency and https://docs.github.com/en/actions/learn-github-actions/contexts for more info.
+  group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    name: Run Tests
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bazel
-        uses: bazelbuild/setup-bazelisk@v3
-
+      - uses: actions/checkout@v6
+      - uses: bazel-contrib/setup-bazel@0.15.0
       - name: Run Tests
-        run: bazel test --config=ci //...
-
+        run: bazel test //...
+      - name: Run E2E Tests
+        run: bazel test //...
+        working-directory: e2e/smoke
       - name: Run Doc Tests
         run: bazel test //...
         working-directory: docs
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pre-commit/action@v3.0.1
+  # For branch protection settings, this job provides a "stable" name that can be used to gate PR merges
+  # on "all matrix jobs were successful".
+  conclusion:
+    needs: [test, pre-commit]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: technote-space/workflow-conclusion-action@45ce8e0eb155657ab8ccf346ade734257fd196a5 # v3.0.3
+      # Note: possible conclusion values:
+      # https://github.com/technote-space/workflow-conclusion-action/blob/main/src/constant.ts
+      - name: report success
+        if: ${{ env.WORKFLOW_CONCLUSION == 'success' }}
+        working-directory: /tmp
+        run: echo ${{ env.WORKFLOW_CONCLUSION }} && exit 0
+      - name: report failure
+        if: ${{ env.WORKFLOW_CONCLUSION == 'failure' }}
+        working-directory: /tmp
+        run: echo ${{ env.WORKFLOW_CONCLUSION }} && exit 1

@@ -1,7 +1,13 @@
 {
-  "homepage": "https://github.com/myorg/rules_mylang",
-  "maintainers": [],
-  "repository": ["github:myorg/rules_mylang"],
+  "homepage": "https://github.com/jvolkman/toml.bzl",
+  "maintainers": [
+    {
+      "email": "jeremy@jvolkman.com",
+      "github": "jvolkman",
+      "name": "Jeremy Volkman"
+    }
+  ],
+  "repository": ["github:jvolkman/toml.bzl"],
   "versions": [],
   "yanked_versions": {}
 }

@@ -1,3 +1,5 @@
+"""Private build rules for TOML library."""
+
 load("@bazel_lib//:bzl_library.bzl", "bzl_library")
 
 package(default_visibility = ["//toml:__subpackages__"])

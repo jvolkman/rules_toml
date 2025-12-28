@@ -1,3 +1,5 @@
+"""Benchmarks for TOML library."""
+
 load("@bazel_lib//:bzl_library.bzl", "bzl_library")
 load("//toml/tests/benchmarks:benchmark_test.bzl", "benchmark_test")
 load(":cargo_lock_prof.bzl", "benchmark_runner")

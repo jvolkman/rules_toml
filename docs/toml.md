@@ -1,6 +1,6 @@
 <!-- Generated with Stardoc: http://skydoc.bazel.build -->
 
-Public API re-exports
+Core TOML parsing and serialization library.
 
 <a id="toml.decode"></a>
 

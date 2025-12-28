@@ -1,3 +1,5 @@
+"""Build rules for documentation."""
+
 load("@aspect_bazel_lib//lib:docs.bzl", "stardoc_with_diff_test", "update_docs")
 
 # buildifier: disable=native-java-binary

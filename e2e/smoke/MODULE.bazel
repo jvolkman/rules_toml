@@ -1,0 +1,19 @@
+"""Bazel module for toml.bzl smoke tests."""
+
+module(name = "toml_smoke_test")
+
+bazel_dep(name = "toml.bzl", version = "0.0.0")
+bazel_dep(name = "re.bzl", version = "0.1.0")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+local_path_override(
+    module_name = "toml.bzl",
+    path = "../..",
+)
+
+# TODO: Remove this when re.bzl is released in BCR.
+git_override(
+    module_name = "re.bzl",
+    commit = "bb9d4f96b095fea9acee37c5ce4d4e4d5f88dbf2",
+    remote = "https://github.com/jvolkman/re.bzl",
+)

@@ -1,0 +1,5 @@
+"""Workspace for toml.bzl."""
+
+workspace(name = "toml.bzl")
+
+# Required for testing on Bazel 6

@@ -1,0 +1,5 @@
+"""Build rules for smoke tests."""
+
+load(":check_toml.bzl", "smoke_test")
+
+smoke_test(name = "smoke_test")

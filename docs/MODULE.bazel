@@ -1,3 +1,5 @@
+"""Bazel module for documentation generation."""
+
 bazel_dep(name = "aspect_bazel_lib", version = "2.14.0")
 bazel_dep(name = "toml.bzl", version = "0.1.0")
 bazel_dep(name = "stardoc", version = "0.8.0", repo_name = "io_bazel_stardoc")
@@ -19,6 +21,6 @@ http_jar(
 # TODO: Remove this when re.bzl is released in BCR.
 git_override(
     module_name = "re.bzl",
-    commit = "e55da054760ebc09dbaec6ae9912d1ab80e4c0b9",
+    commit = "bb9d4f96b095fea9acee37c5ce4d4e4d5f88dbf2",
     remote = "https://github.com/jvolkman/re.bzl",
 )

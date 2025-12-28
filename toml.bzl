@@ -1,6 +1,7 @@
-"Public API re-exports"
+"""Core TOML parsing and serialization library."""
 
-load("//toml:toml.bzl", _decode = "decode", _encode = "encode")
+load("//toml/private:decode.bzl", _decode = "decode")
+load("//toml/private:encode.bzl", _encode = "encode")
 
 toml = struct(
     decode = _decode,
