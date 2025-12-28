@@ -6,17 +6,7 @@ A pure Starlark TOML 1.1.0 encoder and decoder.
 
 For full API documentation, see [the API Reference](docs/toml.md).
 
-### In a `MODULE.bazel`
-
-```starlark
-bazel_dep(name = "toml.bzl", version = "0.0.1")
-
-git_override(
-    module_name = "toml.bzl",
-    remote = "https://github.com/jvolkman/toml.bzl.git",
-    commit = "fb2164e313cf610bd768ee0085437ed3374c9390",
-)
-```
+For installation instructions, see [Releases](https://github.com/jvolkman/toml.bzl/releases).
 
 ### In a `.bzl` file
 
