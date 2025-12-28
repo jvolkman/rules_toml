@@ -36,7 +36,12 @@ _RE_SCALAR = re.compile(
     re.VERBOSE,
 )
 
+# Multiplier applied to input length to set a safe upper bound for loops
+# that substitute for 'while' (which Starlark does not support).
 _MAX_ITERATIONS_MULTIPLIER = 5
+
+# The Unicode replacement character (U+FFFD). Used to detect invalid UTF-8
+# that may have been automatically replaced by the Starlark loader.
 _REPLACEMENT_CHAR = json.decode('"\\uFFFD"')
 
 # --- Status & Error Handling ---
