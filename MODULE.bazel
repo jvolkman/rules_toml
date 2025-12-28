@@ -17,6 +17,7 @@ test_suite = use_repo_rule("//toml/tests:test_suite_repo.bzl", "test_suite")
 
 test_suite(
     name = "toml_test_suite",
+    dev_dependency = True,
     integrity = "sha256-HqXrCuxACrraSFzbdQreUKfqWaKafbXiJs1Ebzdr9vk",
     url = "https://github.com/toml-lang/toml-test/archive/229ce2e7bb565d1704eac5f41e939870d4b1bce7.tar.gz",
 )
