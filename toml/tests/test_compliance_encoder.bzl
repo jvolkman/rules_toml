@@ -78,7 +78,8 @@ def _test_encoder_compliance_impl(env, case):
     # Round-trip verification: decode(encode(data)) == data
     decoded_again = decode(encoded)
 
-    limit = len(json.encode(native_data)) + 100
+    # Bounded loop limit
+    limit = 1000000
     if not _compare_native(native_data, decoded_again, limit):
         env.fail("Encoder Round-Trip Mismatch for {}.\nOriginal: {}\nEncoded: {}\nDecoded: {}".format(
             case.name,

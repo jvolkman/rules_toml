@@ -38,7 +38,7 @@ _RE_SCALAR = re.compile(
 
 # Multiplier applied to input length to set a safe upper bound for loops
 # that substitute for 'while' (which Starlark does not support).
-_MAX_ITERATIONS_MULTIPLIER = 5
+_MAX_ITERATIONS_MULTIPLIER = 2
 
 # The Unicode replacement character (U+FFFD). Used to detect invalid UTF-8
 # that may have been automatically replaced by the Starlark loader.
@@ -58,7 +58,7 @@ def _errors():
 
     return struct(add = add, get = get)
 
-def _parser(data, default, return_complex_types_as_string):
+def _parser(data, default, temporal_as_string, max_depth):
     """Initializes the parser state structure."""
     root_dict = {}
     return struct(
@@ -75,7 +75,8 @@ def _parser(data, default, return_complex_types_as_string):
         path_types = {(): "table"},
         explicit_paths = {(): True},
         header_paths = {},
-        return_complex_types_as_string = return_complex_types_as_string,
+        temporal_as_string = temporal_as_string,
+        max_depth = max_depth,
     )
 
 def _fail(state, msg):
@@ -792,17 +793,17 @@ def _parse_scalar(state):
                         if not _validate_offset(state, oh, om):
                             _fail(state, "Invalid offset: " + off_str)
                             return None
-                    if state.return_complex_types_as_string:
+                    if state.temporal_as_string:
                         return (val_str[:10] + tsep + t_str + off_str)
                     return struct(toml_type = "datetime", value = (val_str[:10] + "T" + t_str + off_str))
 
                 # Local Datetime
-                if state.return_complex_types_as_string:
+                if state.temporal_as_string:
                     return (val_str[:10] + tsep + t_str)
                 return struct(toml_type = "datetime-local", value = (val_str[:10] + "T" + t_str))
 
             # Local Date
-            if state.return_complex_types_as_string:
+            if state.temporal_as_string:
                 return val_str
             return struct(toml_type = "date-local", value = val_str)
 
@@ -821,7 +822,7 @@ def _parse_scalar(state):
             frac = groups["tm_frac"]
             if frac != None:
                 res_str += "." + frac
-            if state.return_complex_types_as_string:
+            if state.temporal_as_string:
                 return res_str
             return struct(toml_type = "time-local", value = res_str)
 
@@ -852,17 +853,11 @@ def _parse_scalar(state):
             # Normalize inf/nan string
             lower_val = val_str.lower()
             if "nan" in lower_val:
-                if state.return_complex_types_as_string:
-                    return "nan"
-                return struct(toml_type = "float", value = "nan")
+                # Use float() to support nan, +nan, -nan. Starlark treats -nan as nan.
+                return float(lower_val)
             else:
                 # inf or -inf or +inf
-                val = "inf"
-                if "-" in val_str:
-                    val = "-inf"
-                if state.return_complex_types_as_string:
-                    return val
-                return struct(toml_type = "float", value = val)
+                return float(lower_val)
 
     _fail(state, "Invalid scalar value")
     return None
@@ -898,6 +893,9 @@ def _parse_complex_iterative(state):
                 stack.pop()
                 continue
             if char == "[" or char == "{":
+                if state.max_depth != None and len(stack) >= state.max_depth:
+                    _fail(state, "Max nesting depth exceeded")
+                    return res
                 new_container = [] if char == "[" else {}
                 cont += [new_container]
                 state.pos[0] += 1
@@ -934,6 +932,9 @@ def _parse_complex_iterative(state):
             ks = fr[2]
             explicit_map = stack[-1][3]
             if char == "[" or char == "{":
+                if state.max_depth != None and len(stack) >= state.max_depth:
+                    _fail(state, "Max nesting depth exceeded")
+                    return res
                 new_container = [] if char == "[" else {}
                 curr = cont
                 for i in range(len(ks) - 1):
@@ -1016,7 +1017,11 @@ def _format_scalar_for_test(v):
     if t == "int":
         return {"type": "integer", "value": str(v)}
     if t == "float":
-        return {"type": "float", "value": str(v)}
+        # toml-test expects "inf" instead of "+inf"
+        s = str(v)
+        if s == "+inf":
+            s = "inf"
+        return {"type": "float", "value": s}
     if t == "string":
         return {"type": "string", "value": v}
     if t == "struct":
@@ -1067,7 +1072,7 @@ def _is_globally_safe(data):
     """
     return not data.lstrip(_VALID_ASCII_CHARS)
 
-def decode(data, default = None, expand_values = False, return_complex_types_as_string = False):
+def decode(data, *, default = None, expand_values = False, temporal_as_string = False, max_depth = 1024):
     """Decodes a TOML string into a Starlark structure.
 
     Args:
@@ -1075,8 +1080,10 @@ def decode(data, default = None, expand_values = False, return_complex_types_as_
       default: Optional value to return if parsing fails. If None, the parser will fail.
       expand_values: If True, returns values in the toml-test JSON-compatible format
         (e.g., {"type": "integer", "value": "123"}).
-      return_complex_types_as_string: If True, returns datetime, date, time, nan,
-        and inf as raw strings instead of structs.
+      temporal_as_string: If True, returns datetime, date, and time types
+        as raw strings instead of structs.
+      max_depth: Maximum nesting depth for arrays and inline tables.
+        Pass None to disable.
 
     Returns:
       The decoded Starlark structure (dict/list) or the default value on error.
@@ -1085,7 +1092,7 @@ def decode(data, default = None, expand_values = False, return_complex_types_as_
     # TOML allows parsers to normalize newlines. Doing it up front
     # significantly simplifies the rest of the parsing logic.
     data = data.replace("\r\n", "\n")
-    state = _parser(data, default, return_complex_types_as_string)
+    state = _parser(data, default, temporal_as_string, max_depth)
     state.is_safe[0] = _is_globally_safe(data)
 
     # Process line by line (roughly)

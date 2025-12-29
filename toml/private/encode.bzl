@@ -45,7 +45,7 @@ def _encode_scalar(v):
             return str(v.value)
     fail("Unsupported scalar type: %s" % t)
 
-def _encode_inline_array(arr, limit):
+def _encode_inline_array(arr, max_tables, current_depth = 0):
     # Iterative encoding for arrays/inline values.
     # Uses a stack to flatten the structure into tokens.
 
@@ -56,15 +56,19 @@ def _encode_inline_array(arr, limit):
     # To output "[a, b]", we push "[", "a", ", ", "b", "]".
     # But since we pop from end, we push in reverse: "]", "b", ", ", "a", "[".
 
-    work = [arr]
+    # Work stack stores: (item, depth)
+    work = [(arr, current_depth)]
 
-    # Bounded loop for safety. The limit is derived from the input size.
-    for _ in range(limit):
+    # Bounded loop for safety.
+    for _ in range(max_tables):
         if not work:
             break
 
-        item = work.pop()
+        item, depth = work.pop()
         t = type(item)
+
+        if depth > max_tables:
+            fail("Max nesting depth exceeded in inline structure")
 
         if t == "tuple" and item[0] == "OUT":
             tokens.append(item[1])
@@ -72,32 +76,35 @@ def _encode_inline_array(arr, limit):
 
         if t == "list":
             # Array -> [ val, val ]
-            work.append(("OUT", "]"))
+            work.append((("OUT", "]"), depth))
             for i in range(len(item) - 1, -1, -1):
-                work.append(item[i])
+                work.append((item[i], depth + 1))
                 if i > 0:
-                    work.append(("OUT", ", "))
-            work.append(("OUT", "["))
+                    work.append((("OUT", ", "), depth))
+            work.append((("OUT", "["), depth))
 
         elif t == "dict":
             # Inline Table -> { key = val, ... }
-            work.append(("OUT", "}"))
+            work.append((("OUT", "}"), depth))
             keys = sorted(item.keys())
             for i in range(len(keys) - 1, -1, -1):
                 k = keys[i]
-                work.append(item[k])
-                work.append(("OUT", " = "))
+                work.append((item[k], depth + 1))
+                work.append((("OUT", " = "), depth))
 
                 # We assume keys in inline tables should also be escaped if needed
-                work.append(("OUT", _escape_key(k)))
+                work.append((("OUT", _escape_key(k)), depth))
                 if i > 0:
-                    work.append(("OUT", ", "))
-            work.append(("OUT", "{"))
+                    work.append((("OUT", ", "), depth))
+            work.append((("OUT", "{"), depth))
 
         elif t == "string" or t == "int" or t == "bool" or t == "float" or t == "struct":
             tokens.append(_encode_scalar(item))
         else:
             fail("Unable to encode type in inline structure: %s" % t)
+
+    if work:
+        fail("Max tables exceeded in inline structure")
 
     return "".join(tokens)
 
@@ -109,11 +116,12 @@ def _is_aot(v):
             return False
     return True
 
-def encode(data):
+def encode(data, *, max_tables = 1000000):
     """Encodes a Starlark dictionary into a TOML string.
 
     Args:
         data: The dictionary to encode. Must be a top-level dictionary.
+        max_tables: Maximum number of tables/iterations to process.
 
     Returns:
         A string containing the TOML representation of the data.
@@ -123,22 +131,18 @@ def encode(data):
 
     output = []
 
-    # Detection of cycles and bound calculation
-    # json.encode will fail if a cycle is detected.
-    # The length of the JSON representation is a safe upper bound for
-    # the number of nodes/iterations in the structure.
-    json_repr = json.encode(data)
-    limit = len(json_repr) + 100
-
-    # Stack stores: (path_list, dict_node, is_aot)
-    stack = [([], data, False)]
+    # Stack stores: (path_list, dict_node, is_aot, depth)
+    stack = [([], data, False, 0)]
 
     # Max iterations safety
-    for _ in range(limit):
+    for _ in range(max_tables):
         if not stack:
             break
 
-        path, current, is_aot = stack.pop()
+        path, current, is_aot, depth = stack.pop()
+
+        if depth > max_tables:
+            fail("Max nesting depth exceeded")
 
         keys = sorted(current.keys())
 
@@ -171,7 +175,7 @@ def encode(data):
         # 2. Write Simple Keys
         for k, v in simple_fields:
             if type(v) == "list":
-                val_str = _encode_inline_array(v, limit)
+                val_str = _encode_inline_array(v, max_tables, depth + 1)
             else:
                 val_str = _encode_scalar(v)
             output.append("%s = %s" % (_escape_key(k), val_str))
@@ -180,7 +184,7 @@ def encode(data):
         for i in range(len(tables) - 1, -1, -1):
             k, v = tables[i]
             new_path = path + [k]
-            stack.append((new_path, v, False))
+            stack.append((new_path, v, False, depth + 1))
 
         # 4. Handle Array of Tables
         for i in range(len(arrays_of_tables) - 1, -1, -1):
@@ -188,6 +192,9 @@ def encode(data):
             for j in range(len(v_list) - 1, -1, -1):
                 item = v_list[j]
                 new_path = path + [k]
-                stack.append((new_path, item, True))
+                stack.append((new_path, item, True, depth + 1))
+
+    if stack:
+        fail("Max tables exceeded")
 
     return "\n".join(output)
