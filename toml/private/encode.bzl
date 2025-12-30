@@ -23,6 +23,55 @@ def _escape_key(k):
             return _escape_string(k)
     return k
 
+def _pad_num(n, width):
+    """Pads an integer with leading zeros."""
+    s = str(n)
+    return "0" * (width - len(s)) + s if len(s) < width else s
+
+def _format_temporal(dt):
+    """Formats a TOML temporal struct as a standardized string."""
+    t = getattr(dt, "_toml_type", None)
+    if t == "OffsetDateTime":
+        s = "%s-%s-%sT%s:%s:%s" % (
+            _pad_num(dt.year, 4),
+            _pad_num(dt.month, 2),
+            _pad_num(dt.day, 2),
+            _pad_num(dt.hour, 2),
+            _pad_num(dt.minute, 2),
+            _pad_num(dt.second, 2),
+        )
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        if dt.offset_minutes == 0:
+            s += "Z"
+        else:
+            om = abs(dt.offset_minutes)
+            s += ("+" if dt.offset_minutes >= 0 else "-") + "%s:%s" % (
+                _pad_num(om // 60, 2),
+                _pad_num(om % 60, 2),
+            )
+        return s
+    if t == "LocalDateTime":
+        s = "%s-%s-%sT%s:%s:%s" % (
+            _pad_num(dt.year, 4),
+            _pad_num(dt.month, 2),
+            _pad_num(dt.day, 2),
+            _pad_num(dt.hour, 2),
+            _pad_num(dt.minute, 2),
+            _pad_num(dt.second, 2),
+        )
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        return s
+    if t == "LocalDate":
+        return "%s-%s-%s" % (_pad_num(dt.year, 4), _pad_num(dt.month, 2), _pad_num(dt.day, 2))
+    if t == "LocalTime":
+        s = "%s:%s:%s" % (_pad_num(dt.hour, 2), _pad_num(dt.minute, 2), _pad_num(dt.second, 2))
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        return s
+    return None
+
 def _encode_scalar(v):
     t = type(v)
     if t == "string":
@@ -40,6 +89,11 @@ def _encode_scalar(v):
             return "nan"
         return str(v)
     elif t == "struct":
+        # Check for our new rich temporal types
+        res = _format_temporal(v)
+        if res != None:
+            return res
+
         # Check for TOML special types (datetime, etc.)
         if hasattr(v, "toml_type") and hasattr(v, "value"):
             return str(v.value)

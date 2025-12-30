@@ -58,7 +58,7 @@ def _errors():
 
     return struct(add = add, get = get)
 
-def _parser(data, default, temporal_as_string, max_depth):
+def _parser(data, default, datetime_formatter, max_depth, expand_values):
     """Initializes the parser state structure."""
     root_dict = {}
     return struct(
@@ -75,8 +75,9 @@ def _parser(data, default, temporal_as_string, max_depth):
         path_types = {(): "table"},
         explicit_paths = {(): True},
         header_paths = {},
-        temporal_as_string = temporal_as_string,
+        datetime_formatter = datetime_formatter,
         max_depth = max_depth,
+        expand_values = expand_values,
     )
 
 def _fail(state, msg):
@@ -205,10 +206,10 @@ def _to_hex(val, width):
     s = "%x" % val
     return ("0" * (width - len(s))) + s if len(s) < width else s
 
-def _pad_02(val):
-    """Formats an integer as a 2-digit zero-padded string."""
-    s = "%d" % val
-    return "0" + s if len(s) < 2 else s
+def _pad_num(n, width):
+    """Pads an integer with leading zeros."""
+    s = str(n)
+    return "0" * (width - len(s)) + s if len(s) < width else s
 
 def _codepoint_to_string(code):
     """Converts a Unicode codepoint to a Starlark string."""
@@ -766,9 +767,10 @@ def _parse_scalar(state):
             if not _validate_date(state, year, month, day):
                 _fail(state, "Invalid date: " + val_str)
                 return None
+
             hour_str = groups["dt_hour"]
             if hour_str != None:
-                # Full DateTime
+                # OffsetDateTime or LocalDateTime
                 hour = int(hour_str)
                 minute = int(groups["dt_minute"])
                 sec_str = groups["dt_second"]
@@ -777,35 +779,35 @@ def _parse_scalar(state):
                     _fail(state, "Invalid time in datetime: " + val_str)
                     return None
 
-                # Construct standardized string
-                tsep = groups["dt_tsep"]
-                t_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+                micros = 0
                 frac = groups["dt_frac"]
-                if frac != None:
-                    t_str += "." + frac
+                if frac:
+                    micros = int((frac + "000000")[:6])
+
                 off_str = groups["dt_offset"]
                 if off_str != None:
+                    # OffsetDateTime
                     if off_str in ["Z", "z"]:
-                        off_str = "Z"
+                        off_mins = 0
                     else:
                         oh = int(off_str[1:3])
                         om = int(off_str[4:6])
                         if not _validate_offset(state, oh, om):
                             _fail(state, "Invalid offset: " + off_str)
                             return None
-                    if state.temporal_as_string:
-                        return (val_str[:10] + tsep + t_str + off_str)
-                    return struct(toml_type = "datetime", value = (val_str[:10] + "T" + t_str + off_str))
+                        off_mins = (oh * 60 + om) * (1 if off_str[0] == "+" else -1)
 
-                # Local Datetime
-                if state.temporal_as_string:
-                    return (val_str[:10] + tsep + t_str)
-                return struct(toml_type = "datetime-local", value = (val_str[:10] + "T" + t_str))
+                    res = OffsetDateTime(year, month, day, hour, minute, second, micros, off_mins)
+                else:
+                    # LocalDateTime
+                    res = LocalDateTime(year, month, day, hour, minute, second, micros)
+            else:
+                # LocalDate
+                res = LocalDate(year, month, day)
 
-            # Local Date
-            if state.temporal_as_string:
-                return val_str
-            return struct(toml_type = "date-local", value = val_str)
+            if state.datetime_formatter:
+                return state.datetime_formatter(res)
+            return res
 
         elif groups["time"]:
             state.pos[0] += len(val_str)
@@ -817,14 +819,16 @@ def _parse_scalar(state):
                 _fail(state, "Invalid time: " + val_str)
                 return None
 
-            # Standardize string (ensure :00 if missing)
-            res_str = _pad_02(hour) + ":" + _pad_02(minute) + ":" + _pad_02(second)
+            micros = 0
             frac = groups["tm_frac"]
-            if frac != None:
-                res_str += "." + frac
-            if state.temporal_as_string:
-                return res_str
-            return struct(toml_type = "time-local", value = res_str)
+            if frac:
+                micros = int((frac + "000000")[:6])
+
+            res = LocalTime(hour, minute, second, micros)
+
+            if state.datetime_formatter:
+                return state.datetime_formatter(res)
+            return res
 
         elif groups["hex"]:
             val = val_str[2:]
@@ -1025,6 +1029,15 @@ def _format_scalar_for_test(v):
     if t == "string":
         return {"type": "string", "value": v}
     if t == "struct":
+        tt = getattr(v, "_toml_type", None)
+        if tt == "OffsetDateTime":
+            return {"type": "datetime", "value": datetime_to_string(v)}
+        if tt == "LocalDateTime":
+            return {"type": "datetime-local", "value": datetime_to_string(v)}
+        if tt == "LocalDate":
+            return {"type": "date-local", "value": datetime_to_string(v)}
+        if tt == "LocalTime":
+            return {"type": "time-local", "value": datetime_to_string(v)}
         return {"type": v.toml_type, "value": v.value}
     return None
 
@@ -1072,7 +1085,150 @@ def _is_globally_safe(data):
     """
     return not data.lstrip(_VALID_ASCII_CHARS)
 
-def decode(data, *, default = None, expand_values = False, temporal_as_string = False, max_depth = 1024):
+def OffsetDateTime(year, month, day, hour, minute, second, microsecond, offset_minutes):
+    """Creates an OffsetDateTime struct.
+
+    Args:
+      year: The year.
+      month: The month (1-12).
+      day: The day of the month (1-31).
+      hour: The hour (0-23).
+      minute: The minute (0-59).
+      second: The second (0-60).
+      microsecond: The microsecond (0-999999).
+      offset_minutes: The offset from UTC in minutes.
+
+    Returns:
+      A struct representing an OffsetDateTime.
+    """
+    return struct(
+        _toml_type = "OffsetDateTime",
+        year = year,
+        month = month,
+        day = day,
+        hour = hour,
+        minute = minute,
+        second = second,
+        microsecond = microsecond,
+        offset_minutes = offset_minutes,
+    )
+
+def LocalDateTime(year, month, day, hour, minute, second, microsecond):
+    """Creates a LocalDateTime struct.
+
+    Args:
+      year: The year.
+      month: The month (1-12).
+      day: The day of the month (1-31).
+      hour: The hour (0-23).
+      minute: The minute (0-59).
+      second: The second (0-60).
+      microsecond: The microsecond (0-999999).
+
+    Returns:
+      A struct representing a LocalDateTime.
+    """
+    return struct(
+        _toml_type = "LocalDateTime",
+        year = year,
+        month = month,
+        day = day,
+        hour = hour,
+        minute = minute,
+        second = second,
+        microsecond = microsecond,
+    )
+
+def LocalDate(year, month, day):
+    """Creates a LocalDate struct.
+
+    Args:
+      year: The year.
+      month: The month (1-12).
+      day: The day of the month (1-31).
+
+    Returns:
+      A struct representing a LocalDate.
+    """
+    return struct(
+        _toml_type = "LocalDate",
+        year = year,
+        month = month,
+        day = day,
+    )
+
+def LocalTime(hour, minute, second, microsecond):
+    """Creates a LocalTime struct.
+
+    Args:
+      hour: The hour (0-23).
+      minute: The minute (0-59).
+      second: The second (0-60).
+      microsecond: The microsecond (0-999999).
+
+    Returns:
+      A struct representing a LocalTime.
+    """
+    return struct(
+        _toml_type = "LocalTime",
+        hour = hour,
+        minute = minute,
+        second = second,
+        microsecond = microsecond,
+    )
+
+def datetime_to_string(dt):
+    """Formats a TOML temporal struct as an RFC 3339 standardized string.
+
+    Args:
+      dt: One of the TOML temporal structs.
+
+    Returns:
+      An RFC 3339 standardized string representation.
+    """
+    t = getattr(dt, "_toml_type", None)
+    if t == "OffsetDateTime":
+        s = "%s-%s-%sT%s:%s:%s" % (
+            _pad_num(dt.year, 4),
+            _pad_num(dt.month, 2),
+            _pad_num(dt.day, 2),
+            _pad_num(dt.hour, 2),
+            _pad_num(dt.minute, 2),
+            _pad_num(dt.second, 2),
+        )
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        if dt.offset_minutes == 0:
+            s += "Z"
+        else:
+            om = abs(dt.offset_minutes)
+            s += ("+" if dt.offset_minutes >= 0 else "-") + "%s:%s" % (
+                _pad_num(om // 60, 2),
+                _pad_num(om % 60, 2),
+            )
+        return s
+    if t == "LocalDateTime":
+        s = "%s-%s-%sT%s:%s:%s" % (
+            _pad_num(dt.year, 4),
+            _pad_num(dt.month, 2),
+            _pad_num(dt.day, 2),
+            _pad_num(dt.hour, 2),
+            _pad_num(dt.minute, 2),
+            _pad_num(dt.second, 2),
+        )
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        return s
+    if t == "LocalDate":
+        return "%s-%s-%s" % (_pad_num(dt.year, 4), _pad_num(dt.month, 2), _pad_num(dt.day, 2))
+    if t == "LocalTime":
+        s = "%s:%s:%s" % (_pad_num(dt.hour, 2), _pad_num(dt.minute, 2), _pad_num(dt.second, 2))
+        if dt.microsecond > 0:
+            s += "." + _pad_num(dt.microsecond, 6).rstrip("0")
+        return s
+    fail("Expected a TOML temporal struct, got %s" % type(dt))
+
+def decode(data, *, default = None, expand_values = False, datetime_formatter = None, max_depth = 1024):
     """Decodes a TOML string into a Starlark structure.
 
     Args:
@@ -1080,8 +1236,9 @@ def decode(data, *, default = None, expand_values = False, temporal_as_string = 
       default: Optional value to return if parsing fails. If None, the parser will fail.
       expand_values: If True, returns values in the toml-test JSON-compatible format
         (e.g., {"type": "integer", "value": "123"}).
-      temporal_as_string: If True, returns datetime, date, and time types
-        as raw strings instead of structs.
+      datetime_formatter: Optional function to format datetime, date, and time types.
+        The function receives one of the temporal structs (LocalDate, LocalTime, etc.)
+        and should return a Starlark value.
       max_depth: Maximum nesting depth for arrays and inline tables.
         Pass None to disable.
 
@@ -1092,7 +1249,7 @@ def decode(data, *, default = None, expand_values = False, temporal_as_string = 
     # TOML allows parsers to normalize newlines. Doing it up front
     # significantly simplifies the rest of the parsing logic.
     data = data.replace("\r\n", "\n")
-    state = _parser(data, default, temporal_as_string, max_depth)
+    state = _parser(data, default, datetime_formatter, max_depth, expand_values)
     state.is_safe[0] = _is_globally_safe(data)
 
     # Process line by line (roughly)

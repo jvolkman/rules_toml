@@ -1,10 +1,11 @@
 """Build rules for TOML tests."""
 
-load(":test_complex_string.bzl", "complex_string_test_suite")
 load(":test_compliance_decoder.bzl", "test_compliance_decoder_suite")
 load(":test_compliance_encoder.bzl", "test_compliance_encoder_suite")
+load(":test_datetime.bzl", "datetime_test_suite")
 load(":test_depth.bzl", "depth_test_suite")
 load(":test_encoder_style.bzl", "test_encoder_style_suite")
+load(":test_float.bzl", "float_test_suite")
 
 test_encoder_style_suite(
     name = "test_encoder_style",
@@ -14,6 +15,8 @@ test_compliance_encoder_suite(name = "test_compliance_encoder")
 
 test_compliance_decoder_suite(name = "test_compliance_decoder")
 
-complex_string_test_suite(name = "test_complex_string")
+float_test_suite(name = "test_float")
 
 depth_test_suite(name = "test_depth")
+
+datetime_test_suite(name = "test_datetime")
