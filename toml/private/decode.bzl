@@ -955,93 +955,71 @@ def _parse_complex_iterative(state):
             _fail(state, "EOF in complex")
             return res
         char = data[pos]
-        if mode == _MODE_ARRAY_VAL:
-            if char == "]":
-                pos += 1
-                state["pos"] = pos
-                stack.pop()
-                continue
-            if char == "[" or char == "{":
-                if state["max_depth"] != None and len(stack) >= state["max_depth"]:
-                    _fail(state, "Max nesting depth exceeded")
-                    return res
-                new_container = [] if char == "[" else {}
-                cont += [new_container]
-                pos += 1
-                state["pos"] = pos
-                stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
-                fr[1] = _MODE_ARRAY_COMMA
-                continue
-            val = _parse_val_nested(state)
-            pos = state["pos"]
-            if val != None:
-                cont += [val]
-                fr[1] = _MODE_ARRAY_COMMA
-                continue
-            _fail(state, "Value expected in array")
-        elif mode == _MODE_ARRAY_COMMA:
-            if char == "]":
-                fr[1] = _MODE_ARRAY_VAL
-                continue
-            if char == ",":
-                pos += 1
-                state["pos"] = pos
-                fr[1] = _MODE_ARRAY_VAL
-                continue
-            _fail(state, "Array comma expected")
-        elif mode == _MODE_TABLE_KEY:
-            if char == "}":
-                pos += 1
-                state["pos"] = pos
-                stack.pop()
-                continue
-            ks = _parse_dotted_key(state)
-            _skip_ws(state)
-            _expect(state, "=")
-            _skip_ws(state)
-            pos = state["pos"]
-            fr[2] = ks
-            fr[1] = _MODE_TABLE_VAL
-        elif mode == _MODE_TABLE_VAL:
-            ks = fr[2]
-            explicit_map = stack[-1][3]
-            if char == "[" or char == "{":
-                if state["max_depth"] != None and len(stack) >= state["max_depth"]:
-                    _fail(state, "Max nesting depth exceeded")
-                    return res
-                new_container = [] if char == "[" else {}
-                curr = cont
-                for i in range(len(ks) - 1):
-                    k = ks[i]
-                    if tuple(ks[:i + 1]) in explicit_map:
-                        _fail(state, "Key conflict with %s" % k)
-                        break
-                    if k in curr:
-                        if not _is_dict(curr[k]):
-                            _fail(state, "Key conflict with %s" % k)
-                            break
-                        curr = curr[k]
-                    else:
-                        new_tab = {}
-                        curr[k] = new_tab
-                        curr = new_tab
-                if state["error"] != None:
-                    return res
-                lk = ks[-1]
-                if lk in curr:
-                    _fail(state, "Duplicate key %s" % lk)
-                    return res
-                explicit_map[tuple(ks)] = True
-                curr[lk] = new_container
-                pos += 1
-                state["pos"] = pos
-                stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
-                fr[1] = _MODE_TABLE_COMMA
-            else:
+
+        if mode <= 2:  # Array modes (_MODE_ARRAY_VAL=1, _MODE_ARRAY_COMMA=2)
+            if mode == _MODE_ARRAY_VAL:
+                if char == "]":
+                    pos += 1
+                    state["pos"] = pos
+                    stack.pop()
+                    continue
+                if char in "[{":
+                    if state["max_depth"] != None and len(stack) >= state["max_depth"]:
+                        _fail(state, "Max nesting depth exceeded")
+                        return res
+                    new_container = [] if char == "[" else {}
+                    cont += [new_container]
+                    pos += 1
+                    state["pos"] = pos
+                    stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
+                    fr[1] = _MODE_ARRAY_COMMA
+                    continue
                 val = _parse_val_nested(state)
                 pos = state["pos"]
-                if state["error"] != None:
-                    return res
+                if val != None:
+                    cont += [val]
+                    fr[1] = _MODE_ARRAY_COMMA
+                    continue
+                _fail(state, "Value expected in array")
+            else:  # _MODE_ARRAY_COMMA
+                if char == "]":
+                    fr[1] = _MODE_ARRAY_VAL
+                    continue
+                if char == ",":
+                    pos += 1
+                    state["pos"] = pos
+                    fr[1] = _MODE_ARRAY_VAL
+                    continue
+                _fail(state, "Array comma expected")
+        else:  # Table modes (_MODE_TABLE_KEY=3, _MODE_TABLE_VAL=4, _MODE_TABLE_COMMA=5)
+            if mode == _MODE_TABLE_KEY:
+                if char == "}":
+                    pos += 1
+                    state["pos"] = pos
+                    stack.pop()
+                    continue
+                ks = _parse_dotted_key(state)
+                _skip_ws(state)
+                _expect(state, "=")
+                _skip_ws(state)
+                pos = state["pos"]
+                fr[2] = ks
+                fr[1] = _MODE_TABLE_VAL
+            elif mode == _MODE_TABLE_VAL:
+                ks = fr[2]
+                explicit_map = fr[3]
+                is_nested = char in "[{"
+                if is_nested:
+                    if state["max_depth"] != None and len(stack) >= state["max_depth"]:
+                        _fail(state, "Max nesting depth exceeded")
+                        return res
+                    val = [] if char == "[" else {}
+                else:
+                    val = _parse_val_nested(state)
+                    pos = state["pos"]
+                    if state["error"] != None:
+                        return res
+
                 curr = cont
                 for i in range(len(ks) - 1):
                     k = ks[i]
@@ -1057,32 +1035,41 @@ def _parse_complex_iterative(state):
                         new_tab = {}
                         curr[k] = new_tab
                         curr = new_tab
+
                 if state["error"] != None:
                     return res
+
                 lk = ks[-1]
                 if lk in curr:
                     _fail(state, "Duplicate key %s" % lk)
                     return res
+
                 explicit_map[tuple(ks)] = True
                 curr[lk] = val
+
+                if is_nested:
+                    pos += 1
+                    state["pos"] = pos
+                    stack += [[val, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
+
                 fr[1] = _MODE_TABLE_COMMA
-        elif mode == _MODE_TABLE_COMMA:
-            if char == "}":
-                fr[1] = _MODE_TABLE_KEY
-                continue
-            if char == ",":
-                pos += 1
-                state["pos"] = pos
-                fr[1] = _MODE_TABLE_KEY
-                continue
-            _fail(state, "Inline table comma expected")
+            else:  # _MODE_TABLE_COMMA
+                if char == "}":
+                    fr[1] = _MODE_TABLE_KEY
+                    continue
+                if char == ",":
+                    pos += 1
+                    state["pos"] = pos
+                    fr[1] = _MODE_TABLE_KEY
+                    continue
+                _fail(state, "Inline table comma expected")
     return res
 
 def _parse_val_nested(state):
     """Parses a value when nested inside a complex iterative structure."""
     pos = state["pos"]
     data = state["data"]
-    if data[pos] == '"' or data[pos] == "'":
+    if data[pos] in ("\"", "'"):
         return _parse_string(state)
     return _parse_scalar(state)
 
@@ -1141,10 +1128,11 @@ def _expand_to_toml_test(raw, size_hint):
 def _parse_value(state):
     """Delegates parsing to scalars, strings, or complex structures."""
     _skip_ws(state)
-    if state["pos"] >= state["len"]:
+    pos = state["pos"]
+    if pos >= state["len"]:
         _fail(state, "Value expected at EOF")
         return None
-    char = state["data"][state["pos"]]
+    char = state["data"][pos]
     if char in "[{":
         return _parse_complex_iterative(state)
     if char in "\"'":
