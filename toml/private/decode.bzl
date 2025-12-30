@@ -123,9 +123,7 @@ def _skip_ws(state, skip_nl = False):
         return
 
     # SLOW PATH: Multiple spaces, tabs, or comments
-    state["pos"] = pos
     for _ in range(length):
-        pos = state["pos"]
         if pos >= length:
             break
 
@@ -133,27 +131,32 @@ def _skip_ws(state, skip_nl = False):
         if char in skip_chars:
             # Use small window lstrip to skip contiguous whitespace blocks
             chunk = data[pos:pos + 256]
-            state["pos"] += len(chunk) - len(chunk.lstrip(skip_chars))
+            pos += len(chunk) - len(chunk.lstrip(skip_chars))
             continue
 
         if char == "#":
             newline_pos = data.find("\n", pos)
             comment_end = newline_pos if newline_pos != -1 else length
             comment_text = data[pos:comment_end]
+
+            # Sync pos before validation as it might fail
+            state["pos"] = pos
             if not _validate_text(state, comment_text, "comment", allow_nl = False):
                 return
-            state["pos"] = comment_end
+            pos = comment_end
             continue
         break
+    state["pos"] = pos
 
 def _expect(state, char):
     """Asserts that the next character in the stream is `char` and consumes it."""
     if state["error"] != None:
         return
-    if state["pos"] >= state["len"] or state["data"][state["pos"]] != char:
-        _fail(state, "Expected '%s' at %d" % (char, state["pos"]))
+    pos = state["pos"]
+    if pos >= state["len"] or state["data"][pos] != char:
+        _fail(state, "Expected '%s' at %d" % (char, pos))
         return
-    state["pos"] += 1
+    state["pos"] = pos + 1
 
 # --- Types & Validation ---
 
@@ -290,17 +293,17 @@ def _escape_char(char):
 # buildifier: disable=list-append
 def _parse_basic_string(state):
     """Parses a basic string (double quoted)."""
-    if state["pos"] >= state["len"] or state["data"][state["pos"]] != '"':
-        _fail(state, "Expected '\"' at %d" % state["pos"])
-        return ""
-    state["pos"] += 1
-
-    if state["error"] != None:
-        return ""
-
     data = state["data"]
     length = state["len"]
     pos = state["pos"]
+
+    if pos >= length or data[pos] != '"':
+        _fail(state, "Expected '\"' at %d" % pos)
+        return ""
+    pos += 1
+
+    if state["error"] != None:
+        return ""
 
     # Optimized search for next quote
     quote_idx = data.find('"', pos)
@@ -322,9 +325,8 @@ def _parse_basic_string(state):
     # SLOW PATH: Has escapes, process in chunks
     chars = []
     cached_quote_idx = quote_idx
-    cached_backslash_idx = escape_idx  # Initialize with the first found escape_idx
+    cached_backslash_idx = escape_idx
     for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
-        pos = state["pos"]
         if pos >= length:
             _fail(state, "Unterminated string")
             return ""
@@ -345,40 +347,40 @@ def _parse_basic_string(state):
             if not _validate_text(state, chunk, "string", allow_nl = False):
                 return ""
             chars += [chunk]
-            state["pos"] = next_idx
+            pos = next_idx
 
         # If we hit a quote, we are done
-        if data[state["pos"]] == '"':
-            state["pos"] += 1
+        if data[pos] == '"':
+            state["pos"] = pos + 1
             return "".join(chars)
 
         # Handle backslash escape
-        if data[state["pos"]] == "\\":
-            state["pos"] += 1
-            if state["pos"] >= length:
+        if data[pos] == "\\":
+            pos += 1
+            if pos >= length:
                 _fail(state, "Unterminated string")
                 return ""
-            esc = data[state["pos"]]
-            state["pos"] += 1
+            esc = data[pos]
+            pos += 1
             sm = _escape_char(esc)
             if sm:
                 chars += [sm]
                 continue
 
             if esc == "x":
-                hex_str = data[state["pos"]:state["pos"] + 2]
+                hex_str = data[pos:pos + 2]
                 if len(hex_str) == 2 and _is_hex(hex_str):
                     chars += [_codepoint_to_string(int(hex_str, 16))]
-                    state["pos"] += 2
+                    pos += 2
                     continue
             if esc == "u" or esc == "U":
                 size = 4 if esc == "u" else 8
-                hex_str = data[state["pos"]:state["pos"] + size]
+                hex_str = data[pos:pos + size]
                 if len(hex_str) == size and _is_hex(hex_str):
                     code = int(hex_str, 16)
                     if _is_valid_codepoint(code):
                         chars += [_codepoint_to_string(code)]
-                        state["pos"] += size
+                        pos += size
                         continue
         _fail(state, "Invalid escape")
         return ""
@@ -386,11 +388,14 @@ def _parse_basic_string(state):
 
 def _parse_literal_string(state):
     """Parses a literal string (single quoted)."""
-    _expect(state, "'")
-    if state["error"] != None:
-        return ""
     pos = state["pos"]
     data = state["data"]
+    length = state["len"]
+    if pos >= length or data[pos] != "'":
+        _fail(state, "Expected \"'\" at %d" % pos)
+        return ""
+    pos += 1
+
     idx = data.find("'", pos)
     if idx == -1:
         _fail(state, "Unterminated literal string")
@@ -404,28 +409,29 @@ def _parse_literal_string(state):
 # buildifier: disable=list-append
 def _parse_multiline_basic_string(state):
     """Parses a multi-line basic string (triple double quoted)."""
-    state["pos"] += 2
-    if state["pos"] < state["len"] and state["data"][state["pos"]] == "\n":
-        state["pos"] += 1
+    data = state["data"]
+    length = state["len"]
+    pos = state["pos"]
+
+    pos += 2
+    if pos < length and data[pos] == "\n":
+        pos += 1
 
     chars = []
-    d = state["data"]
-    n = state["len"]
 
-    # Total characters to process is bounded by n
-    for _ in range(n * _MAX_ITERATIONS_MULTIPLIER):
-        p = state["pos"]
-        if p >= n:
+    # Total characters to process is bounded by length
+    for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
+        if pos >= length:
             _fail(state, "Unterminated multiline string")
             return ""
 
         # Find next delimiter, escape, or newline (for skipping)
-        q_idx = d.find('"""', p)
+        q_idx = data.find('"""', pos)
         if q_idx == -1:
             _fail(state, "Unterminated multiline string")
             return ""
 
-        e_idx = d.find("\\", p, q_idx)
+        e_idx = data.find("\\", pos, q_idx)
 
         next_idx = q_idx
         is_esc = False
@@ -433,59 +439,60 @@ def _parse_multiline_basic_string(state):
             next_idx = e_idx
             is_esc = True
 
-        if next_idx > p:
-            chunk = d[p:next_idx]
+        if next_idx > pos:
+            chunk = data[pos:next_idx]
             if not _validate_text(state, chunk, "multiline string", allow_nl = True):
                 return ""
             chars += [chunk]
 
-        state["pos"] = next_idx
+        pos = next_idx
         if not is_esc:
             # Handle potential trailing quotes
-            state["pos"] += 3
+            pos += 3
             ex = 0
             for _ in range(1, 3):
-                if state["pos"] < n and d[state["pos"]] == '"':
+                if pos < length and data[pos] == '"':
                     ex += 1
-                    state["pos"] += 1
+                    pos += 1
                 else:
                     break
             for _ in range(ex):
                 chars += ['"']
+            state["pos"] = pos
             return "".join(chars)
 
         # Handle backslash
-        if d[state["pos"]] == "\\":
-            state["pos"] += 1
-            if state["pos"] >= n:
+        if data[pos] == "\\":
+            pos += 1
+            if pos >= length:
                 break
-            esc = d[state["pos"]]
+            esc = data[pos]
             if esc in " \t\n\r":
                 # line-ending backslash
-                tp = state["pos"]
+                tp = pos
 
                 # Scan subsequent whitespace until newline
-                for _ in range(n - tp):
-                    if tp >= n:
+                for _ in range(length - tp):
+                    if tp >= length:
                         break
-                    c = d[tp]
+                    c = data[tp]
                     if c == " " or c == "\t":
                         tp += 1
                         continue
                     break
 
                 found_nl = False
-                if tp < n and d[tp] == "\r":
+                if tp < length and data[tp] == "\r":
                     tp += 1
-                if tp < n and d[tp] == "\n":
+                if tp < length and data[tp] == "\n":
                     tp += 1
                     found_nl = True
 
                     # Skip all subsequent whitespace/newlines
-                    for _ in range(n - tp):
-                        if tp >= n:
+                    for _ in range(length - tp):
+                        if tp >= length:
                             break
-                        c = d[tp]
+                        c = data[tp]
                         if c == " " or c == "\t" or c == "\n" or c == "\r":
                             tp += 1
                             continue
@@ -494,23 +501,23 @@ def _parse_multiline_basic_string(state):
                     _fail(state, "Invalid backslash escape")
                     return ""
 
-                state["pos"] = tp
+                pos = tp
                 continue
 
             sm = _escape_char(esc)
             if sm:
                 chars += [sm]
-                state["pos"] += 1
+                pos += 1
                 continue
             if esc in "uUx":
                 sz = 2 if esc == "x" else (4 if esc == "u" else 8)
-                state["pos"] += 1
-                hs = d[state["pos"]:state["pos"] + sz]
+                pos += 1
+                hs = data[pos:pos + sz]
                 if len(hs) == sz and _is_hex(hs):
                     code = int(hs, 16)
                     if _is_valid_codepoint(code):
                         chars += [_codepoint_to_string(code)]
-                        state["pos"] += sz
+                        pos += sz
                         continue
         _fail(state, "Invalid escape")
         return ""
@@ -518,13 +525,15 @@ def _parse_multiline_basic_string(state):
 
 def _parse_multiline_literal_string(state):
     """Parses a multiline literal string (triple single-quoted)."""
-    state["pos"] += 2
-    if state["pos"] < state["len"] and state["data"][state["pos"]] == "\n":
-        state["pos"] += 1
+    data = state["data"]
+    length = state["len"]
+    pos = state["pos"]
 
-    p = state["pos"]
-    d = state["data"]
-    idx = d.find("'''", p)
+    pos += 2
+    if pos < length and data[pos] == "\n":
+        pos += 1
+
+    idx = data.find("'''", pos)
     if idx == -1:
         _fail(state, "Unterminated multiline literal string")
         return ""
@@ -532,11 +541,11 @@ def _parse_multiline_literal_string(state):
     # Handle potential trailing quotes
     ex = 0
     for _ in range(1, 3):
-        if idx + 3 + _ <= state["len"] and d[idx + 3:idx + 3 + _] == "'" * _:
+        if idx + 3 + _ <= length and data[idx + 3:idx + 3 + _] == "'" * _:
             ex = _
         else:
             break
-    content = d[p:idx + ex]
+    content = data[pos:idx + ex]
     if not _validate_text(state, content, "multiline literal", allow_nl = True):
         return ""
 
@@ -563,13 +572,18 @@ def _parse_key(state):
     """Parses a TOML key (bare, basic, or literal)."""
     pos = state["pos"]
     data = state["data"]
+    length = state["len"]
+    if pos >= length:
+        _fail(state, "Expected key")
+        return ""
+
     if data[pos] == '"':
-        if pos + 2 < state["len"] and data[pos + 1:pos + 3] == '""':
+        if pos + 2 < length and data[pos + 1:pos + 3] == '""':
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_basic_string(state)
     if data[pos] == "'":
-        if pos + 2 < state["len"] and data[pos + 1:pos + 3] == "''":
+        if pos + 2 < length and data[pos + 1:pos + 3] == "''":
             _fail(state, "Multiline key not allowed")
             return ""
         return _parse_literal_string(state)
@@ -579,8 +593,8 @@ def _parse_key(state):
 
     # Use windowed lstrip to avoid character loop overhead
     # Bounded range to avoid allocation
-    for _ in range(state["len"]):
-        if pos >= state["len"]:
+    for _ in range(length):
+        if pos >= length:
             break
         window = data[pos:pos + 64]
         stripped = window.lstrip(_BARE_KEY_CHARS)
@@ -737,6 +751,7 @@ def _parse_scalar(state):
     """Parses simple scalar values like numbers, booleans, and dates."""
     pos = state["pos"]
     data = state["data"]
+    length = state["len"]
 
     m = _RE_SCALAR.match(data, pos)
     if m:
@@ -756,7 +771,7 @@ def _parse_scalar(state):
                     return None
 
                 # Check for trailing junk that regex might have missed (like another digit after 0)
-                if check_str == "0" and pos + len(val_str) < state["len"] and state["data"][pos + len(val_str)].isdigit():
+                if check_str == "0" and pos + len(val_str) < length and data[pos + len(val_str)].isdigit():
                     _fail(state, "Invalid integer suffix: " + val_str)
                     return None
 
@@ -764,7 +779,7 @@ def _parse_scalar(state):
             if is_float and ("_." in val_str or "._" in val_str or "_e" in val_str or "e_" in val_str or "_E" in val_str or "E_" in val_str):
                 _fail(state, "Invalid underscore in float: " + val_str)
                 return None
-            state["pos"] += len(val_str)
+            state["pos"] = pos + len(val_str)
             val_clean = val_str.replace("_", "")
             if is_float:
                 return float(val_clean)
@@ -772,11 +787,11 @@ def _parse_scalar(state):
                 return int(val_clean)
 
         elif groups["boolean"]:
-            state["pos"] += len(val_str)
+            state["pos"] = pos + len(val_str)
             return val_str == "true"
 
         elif groups["datetime"]:
-            state["pos"] += len(val_str)
+            state["pos"] = pos + len(val_str)
             year = int(groups["dt_year"])
             month = int(groups["dt_month"])
             day = int(groups["dt_day"])
@@ -918,25 +933,32 @@ _MODE_TABLE_COMMA = 5
 # buildifier: disable=list-append
 def _parse_complex_iterative(state):
     """Parses inline tables and arrays iteratively using a manual stack."""
-    char = state["data"][state["pos"]]
+    data = state["data"]
+    length = state["len"]
+    pos = state["pos"]
+
+    char = data[pos]
     res = [] if char == "[" else {}
     stack = [[res, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
-    state["pos"] += 1
+    pos += 1
+    state["pos"] = pos
 
-    for _ in range(state["len"] * _MAX_ITERATIONS_MULTIPLIER):
+    for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
         if not stack or state["error"] != None:
             return res
         fr = stack[-1]
         cont = fr[0]
         mode = fr[1]
         _skip_ws(state, skip_nl = True)
-        if state["pos"] >= state["len"]:
+        pos = state["pos"]
+        if pos >= length:
             _fail(state, "EOF in complex")
             return res
-        char = state["data"][state["pos"]]
+        char = data[pos]
         if mode == _MODE_ARRAY_VAL:
             if char == "]":
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 stack.pop()
                 continue
             if char == "[" or char == "{":
@@ -945,11 +967,13 @@ def _parse_complex_iterative(state):
                     return res
                 new_container = [] if char == "[" else {}
                 cont += [new_container]
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
                 fr[1] = _MODE_ARRAY_COMMA
                 continue
             val = _parse_val_nested(state)
+            pos = state["pos"]
             if val != None:
                 cont += [val]
                 fr[1] = _MODE_ARRAY_COMMA
@@ -960,19 +984,22 @@ def _parse_complex_iterative(state):
                 fr[1] = _MODE_ARRAY_VAL
                 continue
             if char == ",":
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 fr[1] = _MODE_ARRAY_VAL
                 continue
             _fail(state, "Array comma expected")
         elif mode == _MODE_TABLE_KEY:
             if char == "}":
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 stack.pop()
                 continue
             ks = _parse_dotted_key(state)
             _skip_ws(state)
             _expect(state, "=")
             _skip_ws(state)
+            pos = state["pos"]
             fr[2] = ks
             fr[1] = _MODE_TABLE_VAL
         elif mode == _MODE_TABLE_VAL:
@@ -1006,11 +1033,13 @@ def _parse_complex_iterative(state):
                     return res
                 explicit_map[tuple(ks)] = True
                 curr[lk] = new_container
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 stack += [[new_container, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
                 fr[1] = _MODE_TABLE_COMMA
             else:
                 val = _parse_val_nested(state)
+                pos = state["pos"]
                 if state["error"] != None:
                     return res
                 curr = cont
@@ -1042,7 +1071,8 @@ def _parse_complex_iterative(state):
                 fr[1] = _MODE_TABLE_KEY
                 continue
             if char == ",":
-                state["pos"] += 1
+                pos += 1
+                state["pos"] = pos
                 fr[1] = _MODE_TABLE_KEY
                 continue
             _fail(state, "Inline table comma expected")
@@ -1294,12 +1324,16 @@ def decode(data, default = None, datetime_formatter = None, max_depth = 128, exp
     # Initial safety check
     state["is_safe"] = _is_globally_safe(data)
 
-    for _ in range(state["len"] * _MAX_ITERATIONS_MULTIPLIER):
+    data = state["data"]
+    length = state["len"]
+
+    for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
         _skip_ws(state, skip_nl = True)
-        if state["pos"] >= state["len"]:
+        pos = state["pos"]
+        if pos >= length:
             break
 
-        char = state["data"][state["pos"]]
+        char = data[pos]
         if char == "[":
             _parse_table(state)
         elif char == "#":
@@ -1312,8 +1346,9 @@ def decode(data, default = None, datetime_formatter = None, max_depth = 128, exp
 
         # Check for trailing junk on the same line
         _skip_ws(state)
-        if state["pos"] < state["len"]:
-            char = state["data"][state["pos"]]
+        pos = state["pos"]
+        if pos < length:
+            char = data[pos]
             if char != "\n" and char != "\r" and char != "#":
                 _fail(state, "Expected newline or EOF")
                 break

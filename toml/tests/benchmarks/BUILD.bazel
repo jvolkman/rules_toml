@@ -3,6 +3,7 @@
 load("@bazel_lib//:bzl_library.bzl", "bzl_library")
 load("//toml/tests/benchmarks:benchmark_test.bzl", "benchmark_test")
 load(":cargo_lock_prof.bzl", "benchmark_runner")
+load(":test_locals.bzl", "locals_benchmark")
 load(":test_range.bzl", "range_benchmark")
 load(":test_struct_dict.bzl", "struct_dict_benchmark")
 
@@ -35,4 +36,8 @@ range_benchmark(
 
 struct_dict_benchmark(
     name = "struct_dict_prof",
+)
+
+locals_benchmark(
+    name = "locals_prof",
 )
