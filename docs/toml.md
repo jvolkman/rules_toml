@@ -12,20 +12,16 @@ load("@toml.bzl", "toml")
 toml.LocalDate(<a href="#toml.LocalDate-year">year</a>, <a href="#toml.LocalDate-month">month</a>, <a href="#toml.LocalDate-day">day</a>)
 </pre>
 
-Creates a LocalDate struct.
+
 
 **PARAMETERS**
 
 
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
-| <a id="toml.LocalDate-year"></a>year |  The year.   |  none |
-| <a id="toml.LocalDate-month"></a>month |  The month (1-12).   |  none |
-| <a id="toml.LocalDate-day"></a>day |  The day of the month (1-31).   |  none |
-
-**RETURNS**
-
-A struct representing a LocalDate.
+| <a id="toml.LocalDate-year"></a>year |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDate-month"></a>month |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDate-day"></a>day |  <p align="center"> - </p>   |  none |
 
 
 <a id="toml.LocalDateTime"></a>
@@ -38,24 +34,20 @@ load("@toml.bzl", "toml")
 toml.LocalDateTime(<a href="#toml.LocalDateTime-year">year</a>, <a href="#toml.LocalDateTime-month">month</a>, <a href="#toml.LocalDateTime-day">day</a>, <a href="#toml.LocalDateTime-hour">hour</a>, <a href="#toml.LocalDateTime-minute">minute</a>, <a href="#toml.LocalDateTime-second">second</a>, <a href="#toml.LocalDateTime-microsecond">microsecond</a>)
 </pre>
 
-Creates a LocalDateTime struct.
+
 
 **PARAMETERS**
 
 
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
-| <a id="toml.LocalDateTime-year"></a>year |  The year.   |  none |
-| <a id="toml.LocalDateTime-month"></a>month |  The month (1-12).   |  none |
-| <a id="toml.LocalDateTime-day"></a>day |  The day of the month (1-31).   |  none |
-| <a id="toml.LocalDateTime-hour"></a>hour |  The hour (0-23).   |  none |
-| <a id="toml.LocalDateTime-minute"></a>minute |  The minute (0-59).   |  none |
-| <a id="toml.LocalDateTime-second"></a>second |  The second (0-60).   |  none |
-| <a id="toml.LocalDateTime-microsecond"></a>microsecond |  The microsecond (0-999999).   |  none |
-
-**RETURNS**
-
-A struct representing a LocalDateTime.
+| <a id="toml.LocalDateTime-year"></a>year |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-month"></a>month |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-day"></a>day |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-hour"></a>hour |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-minute"></a>minute |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-second"></a>second |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalDateTime-microsecond"></a>microsecond |  <p align="center"> - </p>   |  `0` |
 
 
 <a id="toml.LocalTime"></a>
@@ -68,21 +60,17 @@ load("@toml.bzl", "toml")
 toml.LocalTime(<a href="#toml.LocalTime-hour">hour</a>, <a href="#toml.LocalTime-minute">minute</a>, <a href="#toml.LocalTime-second">second</a>, <a href="#toml.LocalTime-microsecond">microsecond</a>)
 </pre>
 
-Creates a LocalTime struct.
+
 
 **PARAMETERS**
 
 
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
-| <a id="toml.LocalTime-hour"></a>hour |  The hour (0-23).   |  none |
-| <a id="toml.LocalTime-minute"></a>minute |  The minute (0-59).   |  none |
-| <a id="toml.LocalTime-second"></a>second |  The second (0-60).   |  none |
-| <a id="toml.LocalTime-microsecond"></a>microsecond |  The microsecond (0-999999).   |  none |
-
-**RETURNS**
-
-A struct representing a LocalTime.
+| <a id="toml.LocalTime-hour"></a>hour |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalTime-minute"></a>minute |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalTime-second"></a>second |  <p align="center"> - </p>   |  none |
+| <a id="toml.LocalTime-microsecond"></a>microsecond |  <p align="center"> - </p>   |  `0` |
 
 
 <a id="toml.OffsetDateTime"></a>
@@ -95,25 +83,21 @@ load("@toml.bzl", "toml")
 toml.OffsetDateTime(<a href="#toml.OffsetDateTime-year">year</a>, <a href="#toml.OffsetDateTime-month">month</a>, <a href="#toml.OffsetDateTime-day">day</a>, <a href="#toml.OffsetDateTime-hour">hour</a>, <a href="#toml.OffsetDateTime-minute">minute</a>, <a href="#toml.OffsetDateTime-second">second</a>, <a href="#toml.OffsetDateTime-microsecond">microsecond</a>, <a href="#toml.OffsetDateTime-offset_minutes">offset_minutes</a>)
 </pre>
 
-Creates an OffsetDateTime struct.
+
 
 **PARAMETERS**
 
 
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
-| <a id="toml.OffsetDateTime-year"></a>year |  The year.   |  none |
-| <a id="toml.OffsetDateTime-month"></a>month |  The month (1-12).   |  none |
-| <a id="toml.OffsetDateTime-day"></a>day |  The day of the month (1-31).   |  none |
-| <a id="toml.OffsetDateTime-hour"></a>hour |  The hour (0-23).   |  none |
-| <a id="toml.OffsetDateTime-minute"></a>minute |  The minute (0-59).   |  none |
-| <a id="toml.OffsetDateTime-second"></a>second |  The second (0-60).   |  none |
-| <a id="toml.OffsetDateTime-microsecond"></a>microsecond |  The microsecond (0-999999).   |  none |
-| <a id="toml.OffsetDateTime-offset_minutes"></a>offset_minutes |  The offset from UTC in minutes.   |  none |
-
-**RETURNS**
-
-A struct representing an OffsetDateTime.
+| <a id="toml.OffsetDateTime-year"></a>year |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-month"></a>month |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-day"></a>day |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-hour"></a>hour |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-minute"></a>minute |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-second"></a>second |  <p align="center"> - </p>   |  none |
+| <a id="toml.OffsetDateTime-microsecond"></a>microsecond |  <p align="center"> - </p>   |  `0` |
+| <a id="toml.OffsetDateTime-offset_minutes"></a>offset_minutes |  <p align="center"> - </p>   |  `0` |
 
 
 <a id="toml.datetime_to_string"></a>
@@ -126,18 +110,18 @@ load("@toml.bzl", "toml")
 toml.datetime_to_string(<a href="#toml.datetime_to_string-dt">dt</a>)
 </pre>
 
-Formats a TOML temporal struct as an RFC 3339 standardized string.
+Converts a datetime/date/time struct to an ISO 8601 string.
 
 **PARAMETERS**
 
 
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
-| <a id="toml.datetime_to_string-dt"></a>dt |  One of the TOML temporal structs.   |  none |
+| <a id="toml.datetime_to_string-dt"></a>dt |  The struct to convert.   |  none |
 
 **RETURNS**
 
-An RFC 3339 standardized string representation.
+String representation of the datetime.
 
 
 <a id="toml.decode"></a>
@@ -147,7 +131,7 @@ An RFC 3339 standardized string representation.
 <pre>
 load("@toml.bzl", "toml")
 
-toml.decode(<a href="#toml.decode-data">data</a>, *, <a href="#toml.decode-default">default</a>, <a href="#toml.decode-expand_values">expand_values</a>, <a href="#toml.decode-datetime_formatter">datetime_formatter</a>, <a href="#toml.decode-max_depth">max_depth</a>)
+toml.decode(<a href="#toml.decode-data">data</a>, <a href="#toml.decode-default">default</a>, <a href="#toml.decode-datetime_formatter">datetime_formatter</a>, <a href="#toml.decode-max_depth">max_depth</a>, <a href="#toml.decode-expand_values">expand_values</a>)
 </pre>
 
 Decodes a TOML string into a Starlark structure.
@@ -158,14 +142,14 @@ Decodes a TOML string into a Starlark structure.
 | Name  | Description | Default Value |
 | :------------- | :------------- | :------------- |
 | <a id="toml.decode-data"></a>data |  The TOML string to decode.   |  none |
-| <a id="toml.decode-default"></a>default |  Optional value to return if parsing fails. If None, the parser will fail.   |  `None` |
-| <a id="toml.decode-expand_values"></a>expand_values |  If True, returns values in the toml-test JSON-compatible format (e.g., {"type": "integer", "value": "123"}).   |  `False` |
-| <a id="toml.decode-datetime_formatter"></a>datetime_formatter |  Optional function to format datetime, date, and time types. The function receives one of the temporal structs (LocalDate, LocalTime, etc.) and should return a Starlark value.   |  `None` |
-| <a id="toml.decode-max_depth"></a>max_depth |  Maximum nesting depth for arrays and inline tables. Pass None to disable.   |  `1024` |
+| <a id="toml.decode-default"></a>default |  Optional default value to return on failure.   |  `None` |
+| <a id="toml.decode-datetime_formatter"></a>datetime_formatter |  Optional function to format temporal values.   |  `None` |
+| <a id="toml.decode-max_depth"></a>max_depth |  Maximum nesting depth for tables and arrays.   |  `128` |
+| <a id="toml.decode-expand_values"></a>expand_values |  Whether to return a "toml-test" compatible format.   |  `False` |
 
 **RETURNS**
 
-The decoded Starlark structure (dict/list) or the default value on error.
+The decoded Starlark structure, or the default value on failure.
 
 
 <a id="toml.encode"></a>

@@ -1,11 +1,14 @@
 "Public API re-exports"
 
 load(
-    "//toml/private:decode.bzl",
+    "//toml/private:datetime.bzl",
     _LocalDate = "LocalDate",
     _LocalDateTime = "LocalDateTime",
     _LocalTime = "LocalTime",
     _OffsetDateTime = "OffsetDateTime",
+)
+load(
+    "//toml/private:decode.bzl",
     _datetime_to_string = "datetime_to_string",
     _decode = "decode",
 )

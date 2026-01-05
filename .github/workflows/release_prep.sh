@@ -41,9 +41,5 @@ http_archive(
     strip_prefix = "${PREFIX}",
     url = "https://github.com/jvolkman/toml.bzl/releases/download/${TAG}/${ARCHIVE}",
 )
-
-load("@toml.bzl//toml:repositories.bzl", "toml_bzl_dependencies")
-toml_bzl_dependencies()
-
 \`\`\`
 EOF

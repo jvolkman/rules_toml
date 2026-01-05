@@ -8,9 +8,15 @@ bzl_library(
     name = "decode",
     srcs = ["decode.bzl"],
     deps = [
+        ":datetime",
         "@bazel_lib//lib:strings",
-        "@re.bzl//:re",
     ],
+)
+
+bzl_library(
+    name = "datetime",
+    srcs = ["datetime.bzl"],
+    visibility = ["//toml:__subpackages__"],
 )
 
 bzl_library(

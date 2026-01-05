@@ -1,6 +1,4 @@
-"""TOML decoder implementation for Starlark."""
-
-load("@re.bzl", "re")
+"""Starlark TOML Decoder implementation."""
 
 # --- Constants for Tokenization ---
 _BARE_KEY_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
@@ -12,39 +10,9 @@ _TOML_ESCAPES = {
     "f": "\f",
     "r": "\r",
     "\\": "\\",
-    '"': '"',
+    "\"": "\"",
     "e": "\033",
 }
-
-# --- Regex Patterns for Scalars ---
-_RE_SCALAR = re.compile(
-    r"""
-    (?P<datetime>
-        (?P<dt_year>\d{4})-(?P<dt_month>\d{2})-(?P<dt_day>\d{2})  # Date
-        (?:
-            (?P<dt_tsep>[Tt ])                                    # Separator
-            (?P<dt_hour>\d{2}):(?P<dt_minute>\d{2})               # Time
-            (?::(?P<dt_second>\d{2})(?:\.(?P<dt_frac>\d+))?)?     # Optional seconds/frac
-        )?
-        (?P<dt_offset>[Zz]|[+-]\d{2}:\d{2})?                      # Optional offset
-    )|
-    (?P<time>
-        (?P<tm_hour>\d{2}):(?P<tm_minute>\d{2})                   # Time
-        (?::(?P<tm_second>\d{2})(?:\.(?P<tm_frac>\d+))?)?         # Optional seconds/frac
-    )|
-    (?P<hex>0x[0-9a-fA-F_]+)|
-    (?P<oct>0o[0-7_]+)|
-    (?P<bin>0b[01_]+)|
-    (?P<boolean>true|false)|
-    (?P<inf_nan>[+-]?(?:inf|nan))|
-    (?P<number>
-        [+-]?(?:0|[1-9](?:_?\d)*)         # Integer part
-        (?:\.(?:\d(?:_?\d)*))?            # Optional fraction
-        (?:[eE][+-]?(?:\d(?:_?\d)*))?     # Optional exponent
-    )
-    """,
-    re.VERBOSE,
-)
 
 # Multiplier applied to input length to set a safe upper bound for loops
 # that substitute for 'while' (which Starlark does not support).
@@ -160,10 +128,6 @@ def _expect(state, char):
 
 # --- Types & Validation ---
 
-def _is_dict(value):
-    """Returns True if the value is a dictionary."""
-    return type(value) == "dict"
-
 # buildifier: disable=list-append
 def _validate_text(state, text, context, allow_nl = False):
     """Validates that text contains only valid TOML characters and UTF-8."""
@@ -234,6 +198,13 @@ def _to_hex(val, width):
     """Formats an integer as a zero-padded hexadecimal string."""
     s = "%x" % val
     return ("0" * (width - len(s))) + s if len(s) < width else s
+
+def _min_idx(a, b):
+    if a == -1:
+        return b
+    if b == -1:
+        return a
+    return a if a < b else b
 
 def _pad_num(n, width):
     """Pads an integer with leading zeros."""
@@ -743,183 +714,475 @@ def _parse_key_value(state, target):
     last_path_tuple = tuple(base_path + keys)
     if last_key in current:
         _fail(state, "Redefinition of " + last_key)
-        return
-    current[last_key] = value
     state["path_types"][last_path_tuple] = "inline" if type(value) == "dict" else ("array" if type(value) == "list" else "scalar")
+    current[last_key] = value
 
-def _parse_scalar(state):
-    """Parses simple scalar values like numbers, booleans, and dates."""
+def _parse_int_base(state, prefix, valid_chars, base):
+    """Parses a hex, octal, or binary integer."""
     pos = state["pos"]
     data = state["data"]
     length = state["len"]
 
-    m = _RE_SCALAR.match(data, pos)
-    if m:
-        val_str = m.group(0)
-        groups = m.groupdict()
+    # We assume '0x', '0o', '0b' is already checked
+    pos += len(prefix)
+    start = pos
 
-        if groups["number"]:
-            is_float = "." in val_str or "e" in val_str or "E" in val_str
+    # Simple loop because these strings are usually short
+    idx = pos
+    for _ in range(length):
+        if idx >= length:
+            break
+        c = data[idx]
+        if c == "_":
+            idx += 1
+            continue
+        if c in valid_chars:
+            idx += 1
+            continue
+        break
 
-            # Leading zero check for integers
-            if not is_float:
-                check_str = val_str
-                if check_str.startswith("+") or check_str.startswith("-"):
-                    check_str = check_str[1:]
-                if len(check_str) > 1 and check_str[0] == "0":
-                    _fail(state, "Leading zero not allowed in integer: " + val_str)
-                    return None
+    end = idx
+    if end == start:
+        return None  # No digits
 
-                # Check for trailing junk that regex might have missed (like another digit after 0)
-                if check_str == "0" and pos + len(val_str) < length and data[pos + len(val_str)].isdigit():
-                    _fail(state, "Invalid integer suffix: " + val_str)
-                    return None
+    val_str = data[start:end]
 
-            # Float-specific underscore validation
-            if is_float and ("_." in val_str or "._" in val_str or "_e" in val_str or "e_" in val_str or "_E" in val_str or "E_" in val_str):
-                _fail(state, "Invalid underscore in float: " + val_str)
+    # Validate underscores: No leading, no trailing, no double
+    if val_str.startswith("_") or val_str.endswith("_") or "__" in val_str:
+        return None
+
+    cleaned = val_str.replace("_", "")
+    state["pos"] = end
+    return int(cleaned, base)
+
+def _parse_number_strict(text):
+    """Strictly validates a TOML number (float or integer)."""
+    idx = 0
+    length = len(text)
+
+    # 1. Sign
+    if idx < length and (text[idx] == "+" or text[idx] == "-"):
+        idx += 1
+
+    if idx >= length:
+        return None
+
+    # 2. Integer Part
+    if text[idx] == "0":
+        idx += 1
+        if idx < length:
+            c = text[idx]
+            if c != "." and c != "e" and c != "E":
                 return None
-            state["pos"] = pos + len(val_str)
-            val_clean = val_str.replace("_", "")
-            if is_float:
-                return float(val_clean)
+    elif text[idx] in "123456789":
+        idx += 1
+        for _ in range(length):
+            if idx >= length:
+                break
+            c = text[idx]
+            if c in "0123456789":
+                idx += 1
+            elif c == "_":
+                if idx + 1 >= length:
+                    return None
+                if text[idx + 1] == "_":
+                    return None
+                if text[idx + 1] not in "0123456789":
+                    return None
+                idx += 1
             else:
-                return int(val_clean)
+                break
+    else:
+        return None
 
-        elif groups["boolean"]:
-            state["pos"] = pos + len(val_str)
-            return val_str == "true"
+    # 3. Fraction Part
+    if idx < length and text[idx] == ".":
+        idx += 1
+        if idx >= length:
+            return None
+        if not text[idx].isdigit():
+            return None
 
-        elif groups["datetime"]:
-            state["pos"] = pos + len(val_str)
-            year = int(groups["dt_year"])
-            month = int(groups["dt_month"])
-            day = int(groups["dt_day"])
-            if not _validate_date(state, year, month, day):
-                _fail(state, "Invalid date: " + val_str)
+        for _ in range(length):
+            if idx >= length:
+                break
+            c = text[idx]
+            if c.isdigit():
+                idx += 1
+            elif c == "_":
+                if idx + 1 >= length:
+                    return None
+                if not text[idx + 1].isdigit():
+                    return None
+                idx += 1
+            else:
+                break
+
+    # 4. Exponent Part
+    if idx < length and (text[idx] == "e" or text[idx] == "E"):
+        idx += 1
+        if idx >= length:
+            return None
+        if text[idx] == "+" or text[idx] == "-":
+            idx += 1
+            if idx >= length:
                 return None
 
-            hour_str = groups["dt_hour"]
-            if hour_str != None:
-                # OffsetDateTime or LocalDateTime
-                hour = int(hour_str)
-                minute = int(groups["dt_minute"])
-                sec_str = groups["dt_second"]
-                second = int(sec_str) if sec_str != None else 0
-                if not _validate_time(state, hour, minute, second):
-                    _fail(state, "Invalid time in datetime: " + val_str)
+        if not text[idx].isdigit():
+            return None
+
+        for _ in range(length):
+            if idx >= length:
+                break
+            c = text[idx]
+            if c.isdigit():
+                idx += 1
+            elif c == "_":
+                if idx + 1 >= length:
+                    return None
+                if not text[idx + 1].isdigit():
+                    return None
+                idx += 1
+            else:
+                return None
+
+    if idx != length:
+        return None
+
+    return True
+
+def _parse_datetime_strict(text):
+    """Parses a TOML datetime string."""
+    if len(text) < 10:
+        return None
+
+    date_part = text[:10]
+    if date_part[4] != "-" or date_part[7] != "-":
+        return None
+
+    year_s = date_part[:4]
+    month_s = date_part[5:7]
+    day_s = date_part[8:10]
+
+    if not (year_s.isdigit() and month_s.isdigit() and day_s.isdigit()):
+        return None
+
+    res = {
+        "year": int(year_s),
+        "month": int(month_s),
+        "day": int(day_s),
+        "hour": None,
+        "minute": None,
+        "second": None,
+        "microsecond": 0,
+        "offset": None,
+    }
+
+    if len(text) == 10:
+        return res
+
+    rest = text[10:]
+    if not (rest.startswith("T") or rest.startswith("t") or rest.startswith(" ")):
+        return None
+
+    if len(rest) < 6:
+        return None
+
+    time_part = rest[1:]
+    # Check if we have enough for HH:MM:SS (8 chars) or just HH:MM (5 chars)
+    # But wait, logic below assumes index access.
+
+    if len(time_part) < 5:
+        return None
+
+    if time_part[2] != ":":
+        return None
+
+    hour_s = time_part[:2]
+    minute_s = time_part[3:5]
+    if not (hour_s.isdigit() and minute_s.isdigit()):
+        return None
+
+    res["hour"] = int(hour_s)
+    res["minute"] = int(minute_s)
+    res["second"] = 0
+
+    processed_len = 5
+
+    if len(time_part) >= 8 and time_part[5] == ":":
+        second_s = time_part[6:8]
+        if not second_s.isdigit():
+            return None
+        res["second"] = int(second_s)
+        processed_len = 8
+
+    rest = rest[1 + processed_len:]
+
+    if rest.startswith("."):
+        idx = 1
+
+        # Loop bounded by rest length
+        for _ in range(len(rest)):
+            if idx < len(rest) and rest[idx].isdigit():
+                idx += 1
+            else:
+                break
+
+        frac_s = rest[1:idx]
+        if not frac_s:
+            return None
+        micros_s = (frac_s + "000000")[:6]
+        res["microsecond"] = int(micros_s)
+
+        rest = rest[idx:]
+
+    if not rest:
+        return res
+
+    if rest == "Z" or rest == "z":
+        res["offset"] = 0
+    elif rest.startswith("+") or rest.startswith("-"):
+        if len(rest) < 6:
+            return None  # +HH:MM
+
+        # Handle +HH:MM
+        if rest[3] == ":":
+            oh_s = rest[1:3]
+            om_s = rest[4:6]
+            if not (oh_s.isdigit() and om_s.isdigit()):
+                return None
+            if int(om_s) >= 60:
+                return None
+            sign = 1 if rest[0] == "+" else -1
+            res["offset"] = sign * (int(oh_s) * 60 + int(om_s))
+        else:
+            return None
+    else:
+        return None
+
+    return res
+
+def _parse_time_strict(text):
+    """Parses a TOML local time string HH:MM:SS(.frac)? or HH:MM."""
+    if len(text) < 5:
+        return None
+    if text[2] != ":":
+        return None
+
+    hour_s = text[:2]
+    minute_s = text[3:5]
+    if not (hour_s.isdigit() and minute_s.isdigit()):
+        return None
+
+    res = {
+        "hour": int(hour_s),
+        "minute": int(minute_s),
+        "second": 0,
+        "microsecond": 0,
+    }
+
+    if len(text) == 5:
+        return res
+
+    if len(text) < 8 or text[5] != ":":
+        return None
+
+    second_s = text[6:8]
+    if not second_s.isdigit():
+        return None
+    res["second"] = int(second_s)
+
+    rest = text[8:]
+    if rest.startswith("."):
+        if not rest[1:].isdigit():
+            return None
+        micros_s = (rest[1:] + "000000")[:6]
+        res["microsecond"] = int(micros_s)
+    elif rest:
+        return None
+
+    return res
+
+def _parse_scalar(state):
+    """Parses a scalar value using specialized regexes and character lookahead."""
+    pos = state["pos"]
+    data = state["data"]
+    length = state["len"]
+
+    char = data[pos]
+
+    # --- Boolean ---
+    if char == "t":
+        if data.startswith("true", pos):
+            state["pos"] = pos + 4
+            return True
+    elif char == "f":
+        if data.startswith("false", pos):
+            state["pos"] = pos + 5
+            return False
+
+        # --- Inf / Nan (leading i / n) ---
+    elif char == "i":
+        if data.startswith("inf", pos):
+            state["pos"] = pos + 3
+            return float("inf")
+    elif char == "n":
+        if data.startswith("nan", pos):
+            state["pos"] = pos + 3
+            return float("nan")
+
+        # --- Numbers / Dates / Times / Hex / Oct / Bin / Signed Inf ---
+    elif char.isdigit() or char == "+" or char == "-":
+        # Check for Hex/Oct/Bin (only if starts with 0)
+        if char == "0" and pos + 1 < length:
+            next_char = data[pos + 1]
+            if next_char == "x":
+                val = _parse_int_base(state, "0x", "0123456789abcdefABCDEF", 16)
+                if val != None:
+                    return val
+                _fail(state, "Invalid hex integer")
+                return None
+            elif next_char == "o":
+                val = _parse_int_base(state, "0o", "01234567", 8)
+                if val != None:
+                    return val
+                _fail(state, "Invalid octal integer")
+                return None
+            elif next_char == "b":
+                val = _parse_int_base(state, "0b", "01", 2)
+                if val != None:
+                    return val
+                _fail(state, "Invalid binary integer")
+                return None
+
+        # Check for Signed Inf/Nan (+inf, -nan)
+        if (char == "+" or char == "-") and pos + 1 < length:
+            c2 = data[pos + 1]
+            if c2 == "i":
+                if data.startswith("inf", pos + 1):
+                    state["pos"] = pos + 4
+                    val = float("inf")
+                    return val if char == "+" else -val
+            elif c2 == "n":
+                if data.startswith("nan", pos + 1):
+                    state["pos"] = pos + 4
+                    return float("nan")
+
+        # Scan the full token for generic number/date parsing
+        start = pos
+        idx = pos
+        for _ in range(length):
+            if idx >= length:
+                break
+            c = data[idx]
+            if c in "0123456789+-.eE_:TtZz ":
+                idx += 1
+                continue
+            break
+
+        token_candidate = data[start:idx]
+
+        # 1. Try Datetime strict
+        if "-" in token_candidate and len(token_candidate) >= 10:
+            clean_token = token_candidate.rstrip()
+            dt = _parse_datetime_strict(clean_token)
+            if dt:
+                year = dt["year"]
+                month = dt["month"]
+                day = dt["day"]
+                if not _validate_date(state, year, month, day):
+                    _fail(state, "Invalid date")
                     return None
 
-                micros = 0
-                frac = groups["dt_frac"]
-                if frac:
-                    micros = int((frac + "000000")[:6])
+                hour = dt["hour"]
+                if hour != None:
+                    if not _validate_time(state, hour, dt["minute"], dt["second"]):
+                        _fail(state, "Invalid time in datetime")
+                        return None
 
-                off_str = groups["dt_offset"]
-                if off_str != None:
-                    # OffsetDateTime
-                    if off_str in ["Z", "z"]:
-                        off_mins = 0
-                    else:
-                        off_sign = 1 if off_str[0] == "+" else -1
-                        off_hour = int(off_str[1:3])
-                        off_min = int(off_str[4:6])
+                    offset = dt["offset"]
+                    if offset != None:
+                        # OffsetDateTime
+                        off_hour = abs(offset) // 60
+                        off_min = abs(offset) % 60
                         if not _validate_offset(state, off_hour, off_min):
-                            _fail(state, "Invalid offset: " + off_str)
+                            _fail(state, "Invalid offset")
                             return None
-                        off_mins = off_sign * (off_hour * 60 + off_min)
-                    res = struct(
-                        _toml_type = "OffsetDateTime",
-                        year = year,
-                        month = month,
-                        day = day,
-                        hour = hour,
-                        minute = minute,
-                        second = second,
-                        microsecond = micros,
-                        offset_minutes = off_mins,
-                    )
+
+                        res = struct(
+                            _toml_type = "OffsetDateTime",
+                            year = year,
+                            month = month,
+                            day = day,
+                            hour = hour,
+                            minute = dt["minute"],
+                            second = dt["second"],
+                            microsecond = dt["microsecond"],
+                            offset_minutes = offset,
+                        )
+                    else:
+                        # LocalDateTime
+                        res = struct(
+                            _toml_type = "LocalDateTime",
+                            year = year,
+                            month = month,
+                            day = day,
+                            hour = hour,
+                            minute = dt["minute"],
+                            second = dt["second"],
+                            microsecond = dt["microsecond"],
+                        )
                 else:
-                    # LocalDateTime
+                    # LocalDate
                     res = struct(
-                        _toml_type = "LocalDateTime",
+                        _toml_type = "LocalDate",
                         year = year,
                         month = month,
                         day = day,
-                        hour = hour,
-                        minute = minute,
-                        second = second,
-                        microsecond = micros,
                     )
-            else:
-                # LocalDate
+
+                # Success
+                state["pos"] += len(clean_token)
+                if state["datetime_formatter"]:
+                    return state["datetime_formatter"](res)
+                return res
+
+        # Try Time
+        if ":" in token_candidate and len(token_candidate) >= 5:
+            # Time cannot contain space. Date can.
+            token_no_space = token_candidate.split(" ")[0]
+            tm2 = _parse_time_strict(token_no_space)
+            if tm2:
+                if not _validate_time(state, tm2["hour"], tm2["minute"], tm2["second"]):
+                    _fail(state, "Invalid time")
+                    return None
+
+                # Success
                 res = struct(
-                    _toml_type = "LocalDate",
-                    year = year,
-                    month = month,
-                    day = day,
+                    _toml_type = "LocalTime",
+                    hour = tm2["hour"],
+                    minute = tm2["minute"],
+                    second = tm2["second"],
+                    microsecond = tm2["microsecond"],
                 )
+                state["pos"] += len(token_no_space)
+                if state["datetime_formatter"]:
+                    return state["datetime_formatter"](res)
+                return res
 
-            if state["datetime_formatter"]:
-                return state["datetime_formatter"](res)
-            return res
+        # 2. Try Number
+        first_part = token_candidate.split(" ")[0]
 
-        elif groups["time"]:
-            state["pos"] += len(val_str)
-            hour = int(groups["tm_hour"])
-            minute = int(groups["tm_minute"])
-            sec_str = groups["tm_second"]
-            second = int(sec_str) if sec_str != None else 0
-            if not _validate_time(state, hour, minute, second):
-                _fail(state, "Invalid time: " + val_str)
-                return None
-            micros = 0
-            frac = groups["tm_frac"]
-            if frac:
-                micros = int((frac + "000000")[:6])
-            res = struct(
-                _toml_type = "LocalTime",
-                hour = hour,
-                minute = minute,
-                second = second,
-                microsecond = micros,
-            )
-            if state["datetime_formatter"]:
-                return state["datetime_formatter"](res)
-            return res
-
-        elif groups["hex"]:
-            val = val_str[2:]
-            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
-                return None
-            state["pos"] += len(val_str)
-            return int(val.replace("_", ""), 16)
-
-        elif groups["oct"]:
-            val = val_str[2:]
-            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
-                return None
-            state["pos"] += len(val_str)
-            return int(val.replace("_", ""), 8)
-
-        elif groups["bin"]:
-            val = val_str[2:]
-            if len(val) > 0 and (val[-1] == "_" or val[0] == "_"):
-                return None
-            state["pos"] += len(val_str)
-            return int(val.replace("_", ""), 2)
-
-        elif groups["inf_nan"]:
-            state["pos"] += len(val_str)
-
-            # Normalize inf/nan string
-            lower_val = val_str.lower()
-            if "nan" in lower_val:
-                # Use float() to support nan, +nan, -nan. Starlark treats -nan as nan.
-                return float(lower_val)
+        if _parse_number_strict(first_part):
+            state["pos"] += len(first_part)
+            is_float = "." in first_part or "e" in first_part or "E" in first_part
+            if is_float:
+                return float(first_part.replace("_", ""))
             else:
-                # inf or -inf or +inf
-                return float(lower_val)
+                return int(first_part.replace("_", ""))
+
+        _fail(state, "Invalid scalar (number/date) format: " + token_candidate)
+        return None
 
     _fail(state, "Invalid scalar value")
     return None
@@ -941,9 +1204,9 @@ def _parse_complex_iterative(state):
     res = [] if char == "[" else {}
     stack = [[res, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
     pos += 1
-    state["pos"] = pos
 
     for _ in range(length * _MAX_ITERATIONS_MULTIPLIER):
+        state["pos"] = pos
         if not stack or state["error"] != None:
             return res
         fr = stack[-1]
@@ -951,6 +1214,7 @@ def _parse_complex_iterative(state):
         mode = fr[1]
         _skip_ws(state, skip_nl = True)
         pos = state["pos"]
+
         if pos >= length:
             _fail(state, "EOF in complex")
             return res
@@ -1008,6 +1272,20 @@ def _parse_complex_iterative(state):
             elif mode == _MODE_TABLE_VAL:
                 ks = fr[2]
                 explicit_map = fr[3]
+
+                top_k = ks[0]
+                is_dotted = len(ks) > 1
+                was_dotted = explicit_map.get(top_k)
+
+                if was_dotted != None:
+                    if not is_dotted:
+                        _fail(state, "Duplicate key " + top_k)
+                        return res
+                    if not was_dotted:
+                        _fail(state, "Key conflict " + top_k)
+                        return res
+                else:
+                    explicit_map[top_k] = is_dotted
                 is_nested = char in "[{"
                 if is_nested:
                     if state["max_depth"] != None and len(stack) >= state["max_depth"]:
@@ -1020,39 +1298,31 @@ def _parse_complex_iterative(state):
                     if state["error"] != None:
                         return res
 
-                curr = cont
-                for i in range(len(ks) - 1):
-                    k = ks[i]
-                    if tuple(ks[:i + 1]) in explicit_map:
-                        _fail(state, "Key conflict with %s" % k)
-                        break
-                    if k in curr:
-                        if not _is_dict(curr[k]):
-                            _fail(state, "Key conflict with %s" % k)
-                            break
-                        curr = curr[k]
-                    else:
-                        new_tab = {}
-                        curr[k] = new_tab
-                        curr = new_tab
-
-                if state["error"] != None:
+                # Insert val into dict
+                current = cont
+                for k in ks[:-1]:
+                    # Intermediate keys are implicitly tables
+                    if k not in current:
+                        current[k] = {}
+                    current = current[k]
+                    if type(current) != "dict":
+                        _fail(state, "Key conflict")
+                        return res
+                last_k = ks[-1]
+                if last_k in current:
+                    _fail(state, "Duplicate key %s" % last_k)
                     return res
-
-                lk = ks[-1]
-                if lk in curr:
-                    _fail(state, "Duplicate key %s" % lk)
-                    return res
-
-                explicit_map[tuple(ks)] = True
-                curr[lk] = val
+                current[last_k] = val
 
                 if is_nested:
-                    pos += 1
-                    state["pos"] = pos
+                    # Push nested container
                     stack += [[val, _MODE_ARRAY_VAL if char == "[" else _MODE_TABLE_KEY, None, {}]]
+                    fr[1] = _MODE_TABLE_COMMA
+                    pos += 1  # consume [ or {
+                    state["pos"] = pos
+                else:
+                    fr[1] = _MODE_TABLE_COMMA
 
-                fr[1] = _MODE_TABLE_COMMA
             else:  # _MODE_TABLE_COMMA
                 if char == "}":
                     fr[1] = _MODE_TABLE_KEY
@@ -1081,7 +1351,6 @@ def _format_scalar_for_test(v):
     if t == "int":
         return {"type": "integer", "value": str(v)}
     if t == "float":
-        # toml-test expects "inf" instead of "+inf"
         s = str(v)
         if s == "+inf":
             s = "inf"
@@ -1150,107 +1419,16 @@ def _is_globally_safe(data):
     """
     return not data.lstrip(_VALID_ASCII_CHARS)
 
-def OffsetDateTime(year, month, day, hour, minute, second, microsecond, offset_minutes):
-    """Creates an OffsetDateTime struct.
-
-    Args:
-      year: The year.
-      month: The month (1-12).
-      day: The day of the month (1-31).
-      hour: The hour (0-23).
-      minute: The minute (0-59).
-      second: The second (0-60).
-      microsecond: The microsecond (0-999999).
-      offset_minutes: The offset from UTC in minutes.
-
-    Returns:
-      A struct representing an OffsetDateTime.
-    """
-    return struct(
-        _toml_type = "OffsetDateTime",
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        minute = minute,
-        second = second,
-        microsecond = microsecond,
-        offset_minutes = offset_minutes,
-    )
-
-def LocalDateTime(year, month, day, hour, minute, second, microsecond):
-    """Creates a LocalDateTime struct.
-
-    Args:
-      year: The year.
-      month: The month (1-12).
-      day: The day of the month (1-31).
-      hour: The hour (0-23).
-      minute: The minute (0-59).
-      second: The second (0-60).
-      microsecond: The microsecond (0-999999).
-
-    Returns:
-      A struct representing a LocalDateTime.
-    """
-    return struct(
-        _toml_type = "LocalDateTime",
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        minute = minute,
-        second = second,
-        microsecond = microsecond,
-    )
-
-def LocalDate(year, month, day):
-    """Creates a LocalDate struct.
-
-    Args:
-      year: The year.
-      month: The month (1-12).
-      day: The day of the month (1-31).
-
-    Returns:
-      A struct representing a LocalDate.
-    """
-    return struct(
-        _toml_type = "LocalDate",
-        year = year,
-        month = month,
-        day = day,
-    )
-
-def LocalTime(hour, minute, second, microsecond):
-    """Creates a LocalTime struct.
-
-    Args:
-      hour: The hour (0-23).
-      minute: The minute (0-59).
-      second: The second (0-60).
-      microsecond: The microsecond (0-999999).
-
-    Returns:
-      A struct representing a LocalTime.
-    """
-    return struct(
-        _toml_type = "LocalTime",
-        hour = hour,
-        minute = minute,
-        second = second,
-        microsecond = microsecond,
-    )
-
 def datetime_to_string(dt):
-    """Formats a TOML temporal struct as an RFC 3339 standardized string.
+    """Converts a datetime/date/time struct to an ISO 8601 string.
 
     Args:
-      dt: One of the TOML temporal structs.
+        dt: The struct to convert.
 
     Returns:
-      An RFC 3339 standardized string representation.
+        String representation of the datetime.
     """
+
     t = getattr(dt, "_toml_type", None)
     if t == "OffsetDateTime":
         s = "%s-%s-%sT%s:%s:%s" % (
@@ -1345,13 +1523,6 @@ def decode(data, default = None, datetime_formatter = None, max_depth = 128, exp
         return default
 
     return _expand_to_toml_test(state["root"], len(data)) if expand_values else state["root"]
-
-def _min_idx(a, b):
-    if a == -1:
-        return b
-    if b == -1:
-        return a
-    return a if a < b else b
 
 def _is_valid_codepoint(code):
     return (0 <= code and code <= 0x10FFFF) and not (0xD800 <= code and code <= 0xDFFF)
